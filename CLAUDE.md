@@ -19,10 +19,13 @@ This app is optimized for AI collaboration:
 
 ## Quick Reference for Claude Code
 
-**File location:**
+**File location (Tauri desktop mode):**
 ```
-~/Library/Application Support/com.lucianolupo.infinite-brainstorm/board.json
+# Uses current working directory where `cargo tauri dev` is run
+./board.json
 ```
+
+**Browser mode:** Data is stored in `localStorage` under key `infinite-brainstorm-board`.
 
 **Minimal node:**
 ```json
@@ -37,7 +40,8 @@ This app is optimized for AI collaboration:
 
 ### Read the current board state
 ```bash
-cat ~/Library/Application\ Support/com.lucianolupo.infinite-brainstorm/board.json
+# In the directory where you ran `cargo tauri dev`
+cat ./board.json
 ```
 
 ### Add multiple nodes at once
@@ -88,8 +92,8 @@ Read the file, parse JSON, append nodes with calculated positions, write back. U
                                │
 ┌──────────────────────────────┴──────────────────────────────────────┐
 │                          Data Layer                                 │
-│  ~/Library/Application Support/com.lucianolupo.infinite-brainstorm/ │
-│  └── board.json  ← Claude Code edits this directly                  │
+│  Tauri mode: ./board.json (current working directory)               │
+│  Browser mode: localStorage["infinite-brainstorm-board"]            │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 

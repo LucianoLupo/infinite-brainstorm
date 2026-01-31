@@ -20,6 +20,50 @@ extern "C" {
     async fn listen(event: &str, handler: &Closure<dyn Fn(JsValue)>) -> JsValue;
 }
 
+const LOCALSTORAGE_KEY: &str = "infinite-brainstorm-board";
+
+// Flag to skip file watcher reload after our own saves
+thread_local! {
+    static SKIP_NEXT_RELOAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn is_tauri() -> bool {
+    web_sys::window()
+        .and_then(|w| js_sys::Reflect::get(&w, &JsValue::from_str("__TAURI__")).ok())
+        .map(|v| !v.is_undefined())
+        .unwrap_or(false)
+}
+
+async fn load_board_storage() -> Board {
+    if is_tauri() {
+        let result = invoke("load_board", JsValue::NULL).await;
+        serde_wasm_bindgen::from_value::<Board>(result).unwrap_or_default()
+    } else {
+        web_sys::window()
+            .and_then(|w| w.local_storage().ok().flatten())
+            .and_then(|storage| storage.get_item(LOCALSTORAGE_KEY).ok().flatten())
+            .and_then(|json| serde_json::from_str::<Board>(&json).ok())
+            .unwrap_or_default()
+    }
+}
+
+async fn save_board_storage(board: &Board) {
+    if is_tauri() {
+        // Set flag to skip the file watcher reload triggered by our own save
+        SKIP_NEXT_RELOAD.with(|flag| flag.set(true));
+        let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: board.clone() }).unwrap();
+        let _ = invoke("save_board", args).await;
+    } else {
+        if let Ok(json) = serde_json::to_string(board) {
+            if let Some(storage) = web_sys::window()
+                .and_then(|w| w.local_storage().ok().flatten())
+            {
+                let _ = storage.set_item(LOCALSTORAGE_KEY, &json);
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct SaveBoardArgs {
     board: Board,
@@ -140,22 +184,40 @@ pub fn App() -> impl IntoView {
     let (image_load_trigger, set_image_load_trigger) = signal(0u32);
     let (link_preview_trigger, set_link_preview_trigger) = signal(0u32);
 
+    // Load board on startup (with small delay to ensure Tauri is ready)
     Effect::new(move || {
         spawn_local(async move {
-            let result = invoke("load_board", JsValue::NULL).await;
-            if let Ok(loaded_board) = serde_wasm_bindgen::from_value::<Board>(result) {
-                set_board.set(loaded_board);
-            }
+            // Small delay to ensure Tauri's __TAURI__ is injected
+            gloo_timers::future::TimeoutFuture::new(50).await;
+            let loaded_board = load_board_storage().await;
+            set_board.set(loaded_board);
         });
     });
 
+    // File watcher listener (Tauri only)
     Effect::new(move || {
+        if !is_tauri() {
+            return; // Skip file watching in browser mode
+        }
+
         let handler = Closure::new(move |_event: JsValue| {
-            spawn_local(async move {
-                let result = invoke("load_board", JsValue::NULL).await;
-                if let Ok(loaded_board) = serde_wasm_bindgen::from_value::<Board>(result) {
-                    set_board.set(loaded_board);
+            // Skip reload if this was triggered by our own save
+            let should_skip = SKIP_NEXT_RELOAD.with(|flag| {
+                if flag.get() {
+                    flag.set(false);
+                    true
+                } else {
+                    false
                 }
+            });
+
+            if should_skip {
+                return;
+            }
+
+            spawn_local(async move {
+                let loaded_board = load_board_storage().await;
+                set_board.set(loaded_board);
             });
         });
 
@@ -536,8 +598,7 @@ pub fn App() -> impl IntoView {
 
                         let current_board = board.get_untracked();
                         spawn_local(async move {
-                            let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                            let _ = invoke("save_board", args).await;
+                            save_board_storage(&current_board).await;
                         });
                     }
                 }
@@ -571,8 +632,7 @@ pub fn App() -> impl IntoView {
         if was_dragging {
             let current_board = board.get_untracked();
             spawn_local(async move {
-                let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                let _ = invoke("save_board", args).await;
+                save_board_storage(&current_board).await;
             });
         }
     };
@@ -647,8 +707,7 @@ pub fn App() -> impl IntoView {
 
             let current_board = board.get_untracked();
             spawn_local(async move {
-                let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                let _ = invoke("save_board", args).await;
+                save_board_storage(&current_board).await;
             });
         }
     };
@@ -672,8 +731,7 @@ pub fn App() -> impl IntoView {
 
                     let current_board = board.get_untracked();
                     spawn_local(async move {
-                        let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                        let _ = invoke("save_board", args).await;
+                        save_board_storage(&current_board).await;
                     });
                 } else if !selected.is_empty() {
                     set_board.update(|b| {
@@ -684,8 +742,7 @@ pub fn App() -> impl IntoView {
 
                     let current_board = board.get_untracked();
                     spawn_local(async move {
-                        let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                        let _ = invoke("save_board", args).await;
+                        save_board_storage(&current_board).await;
                     });
                 }
             }
@@ -701,8 +758,7 @@ pub fn App() -> impl IntoView {
 
                     let current_board = board.get_untracked();
                     spawn_local(async move {
-                        let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                        let _ = invoke("save_board", args).await;
+                        save_board_storage(&current_board).await;
                     });
                 }
             }
@@ -747,8 +803,7 @@ pub fn App() -> impl IntoView {
 
                                 let current_board = board.get_untracked();
                                 spawn_local(async move {
-                                    let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                                    let _ = invoke("save_board", args).await;
+                                    save_board_storage(&current_board).await;
                                 });
                             }
                         }
@@ -771,8 +826,7 @@ pub fn App() -> impl IntoView {
 
                                         let current_board = board.get_untracked();
                                         spawn_local(async move {
-                                            let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                                            let _ = invoke("save_board", args).await;
+                                            save_board_storage(&current_board).await;
                                         });
                                     }
                                 }
@@ -813,8 +867,7 @@ pub fn App() -> impl IntoView {
 
                                 let current_board = board.get_untracked();
                                 spawn_local(async move {
-                                    let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                                    let _ = invoke("save_board", args).await;
+                                    save_board_storage(&current_board).await;
                                 });
                             }
                         }
@@ -837,8 +890,7 @@ pub fn App() -> impl IntoView {
 
                                         let current_board = board.get_untracked();
                                         spawn_local(async move {
-                                            let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                                            let _ = invoke("save_board", args).await;
+                                            save_board_storage(&current_board).await;
                                         });
                                         set_editing_node.set(None);
                                     }
@@ -995,8 +1047,7 @@ pub fn App() -> impl IntoView {
 
                                                 let current_board = board.get_untracked();
                                                 spawn_local(async move {
-                                                    let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                                                    let _ = invoke("save_board", args).await;
+                                                    save_board_storage(&current_board).await;
                                                 });
 
                                                 // Switch back to view mode

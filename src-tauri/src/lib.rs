@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Board {
@@ -45,11 +45,16 @@ pub struct LinkPreview {
     pub site_name: Option<String>,
 }
 
-fn get_board_path(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("board.json")
+fn get_board_path(_app: &AppHandle) -> PathBuf {
+    // Use parent of src-tauri (project root) during dev, or current dir in production
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    // If we're in src-tauri, go up one level to project root
+    if cwd.ends_with("src-tauri") {
+        cwd.parent().unwrap_or(&cwd).join("board.json")
+    } else {
+        cwd.join("board.json")
+    }
 }
 
 fn ensure_board_file(path: &PathBuf) {

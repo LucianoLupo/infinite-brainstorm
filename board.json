@@ -1,0 +1,94 @@
+{
+  "nodes": [
+    {
+      "id": "welcome-1",
+      "x": 0.0,
+      "y": 0.0,
+      "width": 300.0,
+      "height": 120.0,
+      "text": "Hello from Claude Code!",
+      "node_type": "idea"
+    },
+    {
+      "id": "feature-1",
+      "x": 667.0,
+      "y": -209.0,
+      "width": 250.0,
+      "height": 100.0,
+      "text": "Now loads from current directory",
+      "node_type": "text"
+    },
+    {
+      "id": "feature-2",
+      "x": 696.0,
+      "y": -35.0,
+      "width": 250.0,
+      "height": 100.0,
+      "text": "Works in browser with localStorage",
+      "node_type": "text"
+    },
+    {
+      "id": "feature-3",
+      "x": 350.0,
+      "y": 198.0,
+      "width": 250.0,
+      "height": 100.0,
+      "text": "Auto-detects Tauri vs Browser",
+      "node_type": "text"
+    },
+    {
+      "id": "claude-added-1",
+      "x": -350.0,
+      "y": -100.0,
+      "width": 280.0,
+      "height": 120.0,
+      "text": "I just added this node!",
+      "node_type": "idea"
+    },
+    {
+      "id": "claude-added-2",
+      "x": -350.0,
+      "y": 80.0,
+      "width": 280.0,
+      "height": 100.0,
+      "text": "Real-time sync working",
+      "node_type": "note"
+    },
+    {
+      "id": "claude-added-3",
+      "x": -350.0,
+      "y": 230.0,
+      "width": 280.0,
+      "height": 100.0,
+      "text": "Agent-native collaboration!",
+      "node_type": "idea"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "from_node": "welcome-1",
+      "to_node": "feature-1"
+    },
+    {
+      "id": "edge-3",
+      "from_node": "welcome-1",
+      "to_node": "feature-3"
+    },
+    {
+      "id": "edge-claude-1",
+      "from_node": "claude-added-1",
+      "to_node": "claude-added-2"
+    },
+    {
+      "id": "edge-claude-2",
+      "from_node": "claude-added-2",
+      "to_node": "claude-added-3"
+    },
+    {
+      "id": "edge-claude-connect",
+      "from_node": "welcome-1",
+      "to_node": "claude-added-1"
+    }
+  ]
+}

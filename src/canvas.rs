@@ -1,4 +1,5 @@
 use crate::state::{Board, Camera, Node};
+use std::collections::HashSet;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
@@ -8,7 +9,10 @@ pub fn render_board(
     canvas: &HtmlCanvasElement,
     board: &Board,
     camera: &Camera,
-    selected_node: Option<&String>,
+    selected_nodes: &HashSet<String>,
+    editing_node: Option<&String>,
+    edge_preview: Option<(Option<&String>, f64, f64)>,
+    selection_box: Option<(f64, f64, f64, f64)>,
 ) {
     let width = canvas.width() as f64;
     let height = canvas.height() as f64;
@@ -22,9 +26,18 @@ pub fn render_board(
         draw_edge(ctx, board, edge, camera);
     }
 
+    if let Some((Some(from_node_id), to_screen_x, to_screen_y)) = edge_preview {
+        draw_edge_preview(ctx, board, from_node_id, to_screen_x, to_screen_y, camera);
+    }
+
     for node in &board.nodes {
-        let is_selected = selected_node.map_or(false, |id| id == &node.id);
-        draw_node(ctx, node, camera, is_selected);
+        let is_selected = selected_nodes.contains(&node.id);
+        let is_editing = editing_node.map_or(false, |id| id == &node.id);
+        draw_node(ctx, node, camera, is_selected, is_editing);
+    }
+
+    if let Some((min_x, min_y, max_x, max_y)) = selection_box {
+        draw_selection_box(ctx, camera, min_x, min_y, max_x, max_y);
     }
 }
 
@@ -59,7 +72,7 @@ fn draw_grid(ctx: &CanvasRenderingContext2d, camera: &Camera, width: f64, height
     }
 }
 
-fn draw_node(ctx: &CanvasRenderingContext2d, node: &Node, camera: &Camera, is_selected: bool) {
+fn draw_node(ctx: &CanvasRenderingContext2d, node: &Node, camera: &Camera, is_selected: bool, is_editing: bool) {
     let (screen_x, screen_y) = camera.world_to_screen(node.x, node.y);
     let screen_width = node.width * camera.zoom;
     let screen_height = node.height * camera.zoom;
@@ -85,17 +98,19 @@ fn draw_node(ctx: &CanvasRenderingContext2d, node: &Node, camera: &Camera, is_se
     draw_rounded_rect(ctx, screen_x, screen_y, screen_width, screen_height, radius);
     ctx.stroke();
 
-    ctx.set_fill_style_str("#ffffff");
-    let font_size = (14.0 * camera.zoom).max(8.0);
-    ctx.set_font(&format!("{}px sans-serif", font_size));
-    ctx.set_text_align("center");
-    ctx.set_text_baseline("middle");
+    if !is_editing {
+        ctx.set_fill_style_str("#ffffff");
+        let font_size = (14.0 * camera.zoom).max(8.0);
+        ctx.set_font(&format!("{}px sans-serif", font_size));
+        ctx.set_text_align("center");
+        ctx.set_text_baseline("middle");
 
-    let text_x = screen_x + screen_width / 2.0;
-    let text_y = screen_y + screen_height / 2.0;
+        let text_x = screen_x + screen_width / 2.0;
+        let text_y = screen_y + screen_height / 2.0;
 
-    let max_width = screen_width - 20.0 * camera.zoom;
-    let _ = ctx.fill_text_with_max_width(&node.text, text_x, text_y, max_width);
+        let max_width = screen_width - 20.0 * camera.zoom;
+        let _ = ctx.fill_text_with_max_width(&node.text, text_x, text_y, max_width);
+    }
 }
 
 fn draw_rounded_rect(
@@ -142,6 +157,53 @@ fn draw_edge(ctx: &CanvasRenderingContext2d, board: &Board, edge: &crate::state:
         ctx.line_to(to_screen_x, to_screen_y);
         ctx.stroke();
     }
+}
+
+fn draw_edge_preview(
+    ctx: &CanvasRenderingContext2d,
+    board: &Board,
+    from_node_id: &str,
+    to_screen_x: f64,
+    to_screen_y: f64,
+    camera: &Camera,
+) {
+    if let Some(from) = board.nodes.iter().find(|n| n.id == from_node_id) {
+        let from_center_x = from.x + from.width / 2.0;
+        let from_center_y = from.y + from.height / 2.0;
+        let (from_screen_x, from_screen_y) = camera.world_to_screen(from_center_x, from_center_y);
+
+        ctx.set_stroke_style_str("#00ff88");
+        ctx.set_line_width(2.0);
+        ctx.set_line_dash(&js_sys::Array::of2(&JsValue::from(5.0), &JsValue::from(5.0))).unwrap();
+        ctx.begin_path();
+        ctx.move_to(from_screen_x, from_screen_y);
+        ctx.line_to(to_screen_x, to_screen_y);
+        ctx.stroke();
+        ctx.set_line_dash(&js_sys::Array::new()).unwrap();
+    }
+}
+
+fn draw_selection_box(
+    ctx: &CanvasRenderingContext2d,
+    camera: &Camera,
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+) {
+    let (screen_min_x, screen_min_y) = camera.world_to_screen(min_x, min_y);
+    let (screen_max_x, screen_max_y) = camera.world_to_screen(max_x, max_y);
+    let width = screen_max_x - screen_min_x;
+    let height = screen_max_y - screen_min_y;
+
+    ctx.set_fill_style_str("rgba(0, 100, 255, 0.15)");
+    ctx.fill_rect(screen_min_x, screen_min_y, width, height);
+
+    ctx.set_stroke_style_str("rgba(0, 150, 255, 0.8)");
+    ctx.set_line_width(1.0);
+    ctx.set_line_dash(&js_sys::Array::of2(&JsValue::from(4.0), &JsValue::from(4.0))).unwrap();
+    ctx.stroke_rect(screen_min_x, screen_min_y, width, height);
+    ctx.set_line_dash(&js_sys::Array::new()).unwrap();
 }
 
 pub fn get_canvas_context(

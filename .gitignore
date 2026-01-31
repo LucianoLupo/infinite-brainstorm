@@ -1,0 +1,9 @@
+# Build outputs
+/dist/
+/target/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log

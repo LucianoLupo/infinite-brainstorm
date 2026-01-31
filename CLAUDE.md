@@ -308,6 +308,7 @@ infinite-brainstorm/
 - **Undo/redo** - History stack for Ctrl+Z/Y
 - **Multi-board** - Multiple board files, board switcher
 - **CRDT (Loro)** - Real-time collaboration
+- **Local .md links as markdown** - When a link node points to a local filesystem .md file (e.g., `file:///path/to/obsidian/note.md`), render it as a markdown node instead of a link preview. This would enable seamless integration with Obsidian vaults.
 
 **Agent-Native Feature Ideas:**
 - **Semantic zoom** - Show node summaries when zoomed out

@@ -151,14 +151,16 @@ fn draw_node(
                 ctx.set_fill_style_str(if is_selected { TEXT_COLOR } else { TEXT_DIM });
                 let font_size = (12.0 * camera.zoom).max(8.0);
                 ctx.set_font(&format!("{}px {}", font_size, FONT));
-                ctx.set_text_align("center");
-                ctx.set_text_baseline("middle");
 
+                let padding = 8.0 * camera.zoom;
+                let label_height = 16.0 * camera.zoom;
                 let text_x = screen_x + screen_width / 2.0;
-                let text_y = screen_y + screen_height / 2.0;
+                let text_y = screen_y + label_height + (screen_height - label_height) / 2.0;
+                let max_width = screen_width - 2.0 * padding;
+                let max_height = screen_height - label_height - padding;
+                let line_height = font_size * 1.4;
 
-                let max_width = screen_width - 16.0 * camera.zoom;
-                let _ = ctx.fill_text_with_max_width(&node.text, text_x, text_y, max_width);
+                draw_wrapped_text(ctx, &node.text, text_x, text_y, max_width, max_height, line_height);
             }
         }
     }
@@ -415,6 +417,85 @@ fn draw_selection_box(
     ctx.set_stroke_style_str(SELECT_BOX_STROKE);
     ctx.set_line_width(1.0);
     ctx.stroke_rect(screen_min_x, screen_min_y, width, height);
+}
+
+/// Wrap text into multiple lines that fit within max_width
+fn wrap_text(ctx: &CanvasRenderingContext2d, text: &str, max_width: f64) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+
+    // Split by explicit newlines first
+    for paragraph in text.split('\n') {
+        if paragraph.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+
+        let words: Vec<&str> = paragraph.split_whitespace().collect();
+        if words.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+
+        let mut current_line = String::new();
+
+        for word in words {
+            let test_line = if current_line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{} {}", current_line, word)
+            };
+
+            let metrics = ctx.measure_text(&test_line).unwrap_or_else(|_| {
+                ctx.measure_text("").unwrap()
+            });
+
+            if metrics.width() <= max_width || current_line.is_empty() {
+                current_line = test_line;
+            } else {
+                lines.push(current_line);
+                current_line = word.to_string();
+            }
+        }
+
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    lines
+}
+
+/// Draw wrapped text centered in a box
+fn draw_wrapped_text(
+    ctx: &CanvasRenderingContext2d,
+    text: &str,
+    center_x: f64,
+    center_y: f64,
+    max_width: f64,
+    max_height: f64,
+    line_height: f64,
+) {
+    let lines = wrap_text(ctx, text, max_width);
+
+    // Clamp to available height
+    let visible_lines = ((max_height / line_height).floor() as usize).max(1);
+    let lines_to_draw: Vec<_> = lines.into_iter().take(visible_lines).collect();
+    let actual_height = lines_to_draw.len() as f64 * line_height;
+
+    // Start Y position to center the text block
+    let start_y = center_y - actual_height / 2.0 + line_height / 2.0;
+
+    ctx.set_text_align("center");
+    ctx.set_text_baseline("middle");
+
+    for (i, line) in lines_to_draw.iter().enumerate() {
+        let y = start_y + i as f64 * line_height;
+        let _ = ctx.fill_text(line, center_x, y);
+    }
 }
 
 pub fn get_canvas_context(

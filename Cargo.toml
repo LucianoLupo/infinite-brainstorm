@@ -15,6 +15,7 @@ web-sys = { version = "0.3", features = [
     "Element",
     "HtmlCanvasElement",
     "CanvasRenderingContext2d",
+    "TextMetrics",
     "MouseEvent",
     "WheelEvent",
     "KeyboardEvent",

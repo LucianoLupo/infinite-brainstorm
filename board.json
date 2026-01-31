@@ -1,94 +1,1084 @@
 {
   "nodes": [
     {
-      "id": "welcome-1",
-      "x": 0.0,
-      "y": 0.0,
-      "width": 300.0,
-      "height": 120.0,
-      "text": "Hello from Claude Code!",
+      "id": "root",
+      "x": -18.348423943004576,
+      "y": -39.93480505242175,
+      "width": 320.0,
+      "height": 100.0,
+      "text": "Infinite Brainstorm\nTauri v2 + Leptos + Rust WASM",
       "node_type": "idea"
     },
     {
-      "id": "feature-1",
-      "x": 390.76805633501226,
-      "y": -198.76918727166708,
-      "width": 250.0,
-      "height": 100.0,
-      "text": "Now loads from current directory",
-      "node_type": "text"
-    },
-    {
-      "id": "feature-2",
-      "x": 591.134169534588,
-      "y": 81.37549478478651,
-      "width": 250.0,
-      "height": 100.0,
-      "text": "Works in browser with  localStorage",
-      "node_type": "text"
-    },
-    {
-      "id": "feature-3",
-      "x": 312.9133038597933,
-      "y": 302.86583046541205,
-      "width": 250.0,
-      "height": 100.0,
-      "text": "Auto-detects Tauri vs Browser",
-      "node_type": "text"
-    },
-    {
-      "id": "claude-added-1",
-      "x": -350.0,
-      "y": -100.0,
-      "width": 280.0,
-      "height": 120.0,
-      "text": "I just added this node!",
+      "id": "frontend",
+      "x": -400.0,
+      "y": -200.0,
+      "width": 200.0,
+      "height": 80.0,
+      "text": "Frontend\n(Leptos WASM)",
       "node_type": "idea"
     },
     {
-      "id": "claude-added-2",
-      "x": -350.0,
-      "y": 80.0,
-      "width": 280.0,
-      "height": 100.0,
-      "text": "Real-time sync working",
+      "id": "fe-app",
+      "x": -250.0,
+      "y": -350.0,
+      "width": 160.0,
+      "height": 60.0,
+      "text": "app.rs\nEvent handlers",
+      "node_type": "text"
+    },
+    {
+      "id": "fe-canvas",
+      "x": -420.0,
+      "y": -350.0,
+      "width": 160.0,
+      "height": 60.0,
+      "text": "canvas.rs\nRendering",
+      "node_type": "text"
+    },
+    {
+      "id": "fe-state",
+      "x": -590.0,
+      "y": -350.0,
+      "width": 160.0,
+      "height": 60.0,
+      "text": "state.rs\nData types",
+      "node_type": "text"
+    },
+    {
+      "id": "backend",
+      "x": 400.0,
+      "y": -200.0,
+      "width": 200.0,
+      "height": 80.0,
+      "text": "Backend\n(Tauri Rust)",
+      "node_type": "idea"
+    },
+    {
+      "id": "be-lib",
+      "x": 400.0,
+      "y": -350.0,
+      "width": 200.0,
+      "height": 60.0,
+      "text": "lib.rs - Commands",
+      "node_type": "text"
+    },
+    {
+      "id": "be-watcher",
+      "x": 300.9301450318299,
+      "y": -450.0,
+      "width": 200.0,
+      "height": 60.0,
+      "text": "File Watcher (notify)",
       "node_type": "note"
     },
     {
-      "id": "claude-added-3",
-      "x": -350.0,
-      "y": 230.0,
+      "id": "data",
+      "x": 0.0,
+      "y": 200.0,
+      "width": 200.0,
+      "height": 80.0,
+      "text": "Data Layer",
+      "node_type": "idea"
+    },
+    {
+      "id": "data-tauri",
+      "x": -202.383098795743,
+      "y": 607.5934220131566,
+      "width": 160.0,
+      "height": 60.0,
+      "text": "Tauri: board.json",
+      "node_type": "text"
+    },
+    {
+      "id": "data-browser",
+      "x": -355.4258218455793,
+      "y": 447.7455225878182,
+      "width": 160.0,
+      "height": 60.0,
+      "text": "Browser: localStorage",
+      "node_type": "text"
+    },
+    {
+      "id": "node-types",
+      "x": -521.9873933582485,
+      "y": 205.59575198891048,
+      "width": 160.0,
+      "height": 70.0,
+      "text": "Node Types",
+      "node_type": "idea"
+    },
+    {
+      "id": "type-text",
+      "x": -760.4002747830341,
+      "y": 193.53600505062315,
+      "width": 120.0,
+      "height": 50.0,
+      "text": "text",
+      "node_type": "text"
+    },
+    {
+      "id": "type-idea",
+      "x": -928.0280027337192,
+      "y": 337.66216553384254,
+      "width": 120.0,
+      "height": 50.0,
+      "text": "idea",
+      "node_type": "idea"
+    },
+    {
+      "id": "type-note",
+      "x": -857.6761961325005,
+      "y": 411.7229369264325,
+      "width": 120.0,
+      "height": 50.0,
+      "text": "note",
+      "node_type": "note"
+    },
+    {
+      "id": "type-image",
+      "x": -754.5534963158648,
+      "y": 494.6173737998215,
+      "width": 120.0,
+      "height": 50.0,
+      "text": "image",
+      "node_type": "image"
+    },
+    {
+      "id": "type-md",
+      "x": -960.3279212029952,
+      "y": 263.60207688790734,
+      "width": 120.0,
+      "height": 50.0,
+      "text": "# markdown",
+      "node_type": "md"
+    },
+    {
+      "id": "type-link",
+      "x": -594.4719511646304,
+      "y": 442.7631541186563,
+      "width": 140.0,
+      "height": 100.0,
+      "text": "https://example.com",
+      "node_type": "link"
+    },
+    {
+      "id": "features",
+      "x": 619.1017682605842,
+      "y": 152.50996155928226,
+      "width": 160.0,
+      "height": 70.0,
+      "text": "Key Features",
+      "node_type": "idea"
+    },
+    {
+      "id": "feat-sync",
+      "x": 357.44313652984823,
+      "y": 221.5899738388569,
+      "width": 160.0,
+      "height": 50.0,
+      "text": "Real-time sync",
+      "node_type": "note"
+    },
+    {
+      "id": "feat-agent",
+      "x": 905.4225067424128,
+      "y": 228.82774932523165,
+      "width": 160.0,
+      "height": 50.0,
+      "text": "Agent-native",
+      "node_type": "note"
+    },
+    {
+      "id": "future-ideas",
+      "x": 613.9229238503569,
+      "y": 314.9888605988006,
+      "width": 160.0,
+      "height": 60.0,
+      "text": "Future Ideas",
+      "node_type": "idea"
+    },
+    {
+      "id": "future-md-links",
+      "x": 391.47170415031184,
+      "y": 444.8458151447539,
+      "width": 220.0,
+      "height": 100.0,
+      "text": "Local .md links → render as mdfile:// links to Obsidian vaultshould display as markdown nodes",
+      "node_type": "note"
+    },
+    {
+      "id": "future-undo",
+      "x": 755.9948349992352,
+      "y": 590.6690655899819,
+      "width": 140.0,
+      "height": 50.0,
+      "text": "Undo/Redo",
+      "node_type": "note"
+    },
+    {
+      "id": "future-crdt",
+      "x": 519.6918203853413,
+      "y": 650.375107770995,
+      "width": 160.0,
+      "height": 50.0,
+      "text": "Loro CRDT collab",
+      "node_type": "note"
+    },
+    {
+      "id": "leptos-hub",
+      "x": -400.0,
+      "y": -550.0,
+      "width": 200.0,
+      "height": 80.0,
+      "text": "Leptos Framework",
+      "node_type": "idea"
+    },
+    {
+      "id": "leptos-what",
+      "x": -700.0,
+      "y": -700.0,
       "width": 280.0,
       "height": 100.0,
-      "text": "Agent-native collaboration!",
+      "text": "What is it?\nReactive Rust framework for web UIs.\nFine-grained reactivity like SolidJS.",
+      "node_type": "note"
+    },
+    {
+      "id": "leptos-signals",
+      "x": -700.0,
+      "y": -850.0,
+      "width": 280.0,
+      "height": 80.0,
+      "text": "Signals Pattern\nlet (val, set_val) = signal(0);",
+      "node_type": "text"
+    },
+    {
+      "id": "leptos-why",
+      "x": -100.0,
+      "y": -700.0,
+      "width": 280.0,
+      "height": 100.0,
+      "text": "Why Leptos?\nSame language as Tauri backend.\nNo virtual DOM. Small WASM bundle.",
+      "node_type": "note"
+    },
+    {
+      "id": "leptos-alts",
+      "x": -400.0,
+      "y": -850.0,
+      "width": 200.0,
+      "height": 70.0,
+      "text": "Alternatives",
       "node_type": "idea"
+    },
+    {
+      "id": "alt-yew",
+      "x": -550.0,
+      "y": -970.0,
+      "width": 160.0,
+      "height": 70.0,
+      "text": "Yew\nVirtual DOM",
+      "node_type": "text"
+    },
+    {
+      "id": "alt-dioxus",
+      "x": -380.0,
+      "y": -970.0,
+      "width": 160.0,
+      "height": 70.0,
+      "text": "Dioxus\nReact-like",
+      "node_type": "text"
+    },
+    {
+      "id": "alt-sycamore",
+      "x": -210.0,
+      "y": -970.0,
+      "width": 160.0,
+      "height": 70.0,
+      "text": "Sycamore\nSmaller community",
+      "node_type": "text"
+    },
+    {
+      "id": "link-leptos-docs",
+      "x": -700.0,
+      "y": -550.0,
+      "width": 250.0,
+      "height": 160.0,
+      "text": "https://leptos.dev",
+      "node_type": "link"
+    },
+    {
+      "id": "link-leptos-book",
+      "x": -100.0,
+      "y": -550.0,
+      "width": 250.0,
+      "height": 160.0,
+      "text": "https://book.leptos.dev",
+      "node_type": "link"
+    },
+    {
+      "id": "research-hub",
+      "x": 700.0,
+      "y": -200.0,
+      "width": 200.0,
+      "height": 80.0,
+      "text": "Research Journey",
+      "node_type": "idea"
+    },
+    {
+      "id": "research-studied",
+      "x": 650.0,
+      "y": -350.0,
+      "width": 160.0,
+      "height": 70.0,
+      "text": "What We Studied",
+      "node_type": "idea"
+    },
+    {
+      "id": "study-figma",
+      "x": 500.0,
+      "y": -500.0,
+      "width": 180.0,
+      "height": 80.0,
+      "text": "Figma Architecture\nC++ → WASM, custom WebGL",
+      "node_type": "note"
+    },
+    {
+      "id": "study-femtovg",
+      "x": 700.0,
+      "y": -500.0,
+      "width": 180.0,
+      "height": 80.0,
+      "text": "femtovg\nGPU Canvas-like API",
+      "node_type": "note"
+    },
+    {
+      "id": "study-wgpu",
+      "x": 900.0,
+      "y": -500.0,
+      "width": 180.0,
+      "height": 80.0,
+      "text": "wgpu + Lyon\nLow-level WebGPU",
+      "node_type": "note"
+    },
+    {
+      "id": "study-excalidraw",
+      "x": 600.0,
+      "y": -620.0,
+      "width": 180.0,
+      "height": 80.0,
+      "text": "Excalidraw\nFlat JSON schema",
+      "node_type": "note"
+    },
+    {
+      "id": "study-graphite",
+      "x": 800.0,
+      "y": -620.0,
+      "width": 180.0,
+      "height": 80.0,
+      "text": "Graphite Editor\nRust node-based",
+      "node_type": "note"
+    },
+    {
+      "id": "research-decision",
+      "x": 870.0,
+      "y": -350.0,
+      "width": 160.0,
+      "height": 70.0,
+      "text": "What We Built",
+      "node_type": "idea"
+    },
+    {
+      "id": "decision-leptos",
+      "x": 1050.0,
+      "y": -500.0,
+      "width": 200.0,
+      "height": 80.0,
+      "text": "Leptos + HTML5 Canvas\nNot GPU renderer",
+      "node_type": "note"
+    },
+    {
+      "id": "decision-why",
+      "x": 1182.3706465541095,
+      "y": -669.1186675892608,
+      "width": 220.0,
+      "height": 100.0,
+      "text": "Why the Pivot?\n• Browser compatibility\n• Dual-mode (Tauri + web)\n• Simpler architecture",
+      "node_type": "md"
+    },
+    {
+      "id": "research-validated",
+      "x": 760.0,
+      "y": -100.0,
+      "width": 220.0,
+      "height": 100.0,
+      "text": "Core Thesis Validated ✓\nAI edits JSON → App reacts\nCollaboration surface works!",
+      "node_type": "idea"
+    },
+    {
+      "id": "link-obsidian-research",
+      "x": 1094.9072560199277,
+      "y": -269.0991425408245,
+      "width": 280.0,
+      "height": 120.0,
+      "text": "file:///Users/lucianolupo/Documents/Obsidian%20Vault/30_Resources/AI%20Engineering/Rust%20WASM%20Canvas%20App%20-%20Research.md",
+      "node_type": "link"
+    },
+    {
+      "id": "arch-deep",
+      "x": 0.0,
+      "y": 850.0,
+      "width": 280.0,
+      "height": 80.0,
+      "text": "Deep Architecture\nInternal module details",
+      "node_type": "idea"
+    },
+    {
+      "id": "arch-app-detail",
+      "x": -1148.180081492511,
+      "y": 1000.0,
+      "width": 200.0,
+      "height": 70.0,
+      "text": "app.rs Internals",
+      "node_type": "idea"
+    },
+    {
+      "id": "app-signals",
+      "x": -1507.636491757924,
+      "y": 1094.6042614657897,
+      "width": 220.0,
+      "height": 120.0,
+      "text": "Leptos Signals\n• board, set_board\n• camera, set_camera\n• selected_nodes\n• drag_state, pan_state\n• editing_node\n• modal_image, modal_md",
+      "node_type": "note"
+    },
+    {
+      "id": "app-effects",
+      "x": -1512.007022656419,
+      "y": 1327.3918382274426,
+      "width": 220.0,
+      "height": 120.0,
+      "text": "Effects (Side Effects)\n• Load board on startup\n• File watcher listener\n• Image loading\n• Link preview fetching\n• Canvas re-render",
+      "node_type": "note"
+    },
+    {
+      "id": "app-handlers",
+      "x": -990.678456364691,
+      "y": 1133.916070786466,
+      "width": 220.0,
+      "height": 120.0,
+      "text": "Event Handlers\n• on_mouse_down\n• on_mouse_move\n• on_mouse_up\n• on_wheel (zoom)\n• on_double_click\n• on_keydown",
+      "node_type": "note"
+    },
+    {
+      "id": "app-views",
+      "x": -1216.0122230654429,
+      "y": 1362.539689427819,
+      "width": 220.0,
+      "height": 100.0,
+      "text": "View Components\n• Canvas element\n• Editing overlay (input/textarea)\n• MD overlays (HTML render)\n• Image modal\n• MD modal",
+      "node_type": "note"
+    },
+    {
+      "id": "arch-canvas-detail",
+      "x": -88.69731932230027,
+      "y": 1301.9157109156804,
+      "width": 200.0,
+      "height": 70.0,
+      "text": "canvas.rs Internals",
+      "node_type": "idea"
+    },
+    {
+      "id": "canvas-render",
+      "x": -266.0440378898562,
+      "y": 1432.04362285333,
+      "width": 200.0,
+      "height": 100.0,
+      "text": "render_board()\n1. Clear canvas\n2. draw_grid()\n3. draw_edge() for each\n4. draw_node() for each\n5. draw_selection_box()",
+      "node_type": "text"
+    },
+    {
+      "id": "canvas-draw-node",
+      "x": 147.34674244050484,
+      "y": 1425.502875830968,
+      "width": 200.0,
+      "height": 100.0,
+      "text": "draw_node()\n• Background by type\n• Border (selected glow)\n• Type-specific content:\n  - text/idea/note: text\n  - image: thumbnail\n  - link: OG preview",
+      "node_type": "text"
+    },
+    {
+      "id": "canvas-caches",
+      "x": -28.69731932230027,
+      "y": 1531.9157109156804,
+      "width": 200.0,
+      "height": 80.0,
+      "text": "Caches (Rc<RefCell>)\n• ImageCache\n• LinkPreviewCache",
+      "node_type": "note"
+    },
+    {
+      "id": "arch-state-detail",
+      "x": 968.7127243017894,
+      "y": 979.0643637849104,
+      "width": 200.0,
+      "height": 70.0,
+      "text": "state.rs Data Types",
+      "node_type": "idea"
+    },
+    {
+      "id": "state-board",
+      "x": 788.3738471424494,
+      "y": 1078.264738771663,
+      "width": 180.0,
+      "height": 80.0,
+      "text": "Board {\n  nodes: Vec<Node>\n  edges: Vec<Edge>\n}",
+      "node_type": "text"
+    },
+    {
+      "id": "state-node",
+      "x": 1118.7127243017894,
+      "y": 1079.0643637849105,
+      "width": 180.0,
+      "height": 100.0,
+      "text": "Node {\n  id, x, y\n  width, height\n  text, node_type\n}\n+ contains_point()",
+      "node_type": "text"
+    },
+    {
+      "id": "state-camera",
+      "x": 844.3475980697733,
+      "y": 1213.8527391955822,
+      "width": 180.0,
+      "height": 100.0,
+      "text": "Camera {\n  x, y, zoom\n}\n+ screen_to_world()\n+ world_to_screen()",
+      "node_type": "text"
+    },
+    {
+      "id": "state-edge",
+      "x": 1118.7127243017894,
+      "y": 1261.030614977184,
+      "width": 180.0,
+      "height": 70.0,
+      "text": "Edge {\n  id, from_node, to_node\n}",
+      "node_type": "text"
+    },
+    {
+      "id": "arch-backend-detail",
+      "x": 1429.180542409334,
+      "y": 903.6960734105884,
+      "width": 200.0,
+      "height": 70.0,
+      "text": "lib.rs Backend",
+      "node_type": "idea"
+    },
+    {
+      "id": "be-commands",
+      "x": 1334.401541667475,
+      "y": 1096.4525749472966,
+      "width": 200.0,
+      "height": 100.0,
+      "text": "Tauri Commands\n• load_board()\n• save_board()\n• get_board_path_cmd()\n• fetch_link_preview()",
+      "node_type": "text"
+    },
+    {
+      "id": "be-watcher-detail",
+      "x": 1707.929544210992,
+      "y": 995.6998232781136,
+      "width": 220.0,
+      "height": 100.0,
+      "text": "File Watcher\nnotify crate\n• 500ms poll interval\n• 100ms debounce\n• Emits \"board-changed\"",
+      "node_type": "note"
+    },
+    {
+      "id": "be-link-preview",
+      "x": 1597.1299191977446,
+      "y": 1189.6698243379124,
+      "width": 220.0,
+      "height": 100.0,
+      "text": "fetch_link_preview()\nreqwest + scraper\n• og:title, og:image\n• og:description\n• Fallback to <title>",
+      "node_type": "note"
+    },
+    {
+      "id": "arch-dataflow",
+      "x": -990.6609264420764,
+      "y": 1652.8496182714728,
+      "width": 280.0,
+      "height": 70.0,
+      "text": "Data Flow Patterns",
+      "node_type": "idea"
+    },
+    {
+      "id": "flow-user-edit",
+      "x": -1340.6609264420763,
+      "y": 1772.8496182714728,
+      "width": 280.0,
+      "height": 120.0,
+      "text": "User Edits Node\n1. Mouse event → update signal\n2. Effect triggers re-render\n3. On mouseup → save_board()\n4. invoke(\"save_board\") → lib.rs\n5. Write to board.json",
+      "node_type": "md"
+    },
+    {
+      "id": "flow-external-edit",
+      "x": -1020.6609264420764,
+      "y": 1772.8496182714728,
+      "width": 280.0,
+      "height": 120.0,
+      "text": "Claude Edits JSON\n1. board.json modified\n2. notify detects change\n3. emit(\"board-changed\")\n4. Frontend listen() fires\n5. load_board() → set_board()\n6. Canvas re-renders",
+      "node_type": "md"
+    },
+    {
+      "id": "flow-skip-reload",
+      "x": -690.6609264420764,
+      "y": 1772.8496182714728,
+      "width": 280.0,
+      "height": 120.0,
+      "text": "Skip Reload Pattern\nPrevents feedback loop:\n1. App save → set SKIP flag\n2. Watcher fires → check flag\n3. If flag set → skip reload\n4. Clear flag\nthread_local! Cell<bool>",
+      "node_type": "md"
+    },
+    {
+      "id": "arch-ipc",
+      "x": 614.1638915181331,
+      "y": 1577.707380912046,
+      "width": 200.0,
+      "height": 70.0,
+      "text": "IPC Bridge",
+      "node_type": "idea"
+    },
+    {
+      "id": "ipc-invoke",
+      "x": 514.1638915181331,
+      "y": 1697.707380912046,
+      "width": 200.0,
+      "height": 100.0,
+      "text": "invoke()Frontend → Backend• Commands via WASM• __TAURI__.core.invoke• Returns JsValue",
+      "node_type": "note"
+    },
+    {
+      "id": "ipc-listen",
+      "x": 734.1638915181331,
+      "y": 1697.707380912046,
+      "width": 200.0,
+      "height": 100.0,
+      "text": "listen()\nBackend → Frontend\n• Events via emit()\n• \"board-changed\" event\n• Closure handler",
+      "node_type": "note"
+    },
+    {
+      "id": "arch-coords",
+      "x": 1014.1638915181333,
+      "y": 1577.707380912046,
+      "width": 200.0,
+      "height": 70.0,
+      "text": "Coordinate System",
+      "node_type": "idea"
+    },
+    {
+      "id": "coords-world",
+      "x": 964.1638915181333,
+      "y": 1697.707380912046,
+      "width": 180.0,
+      "height": 80.0,
+      "text": "World Coords\nWhere nodes live\nInfinite canvas space\nNode.x, Node.y",
+      "node_type": "note"
+    },
+    {
+      "id": "coords-screen",
+      "x": 1164.1638915181331,
+      "y": 1697.707380912046,
+      "width": 180.0,
+      "height": 80.0,
+      "text": "Screen Coords\nPixel position\nCanvas element space\nev.clientX - rect.left",
+      "node_type": "note"
+    },
+    {
+      "id": "coords-transform",
+      "x": 1064.1638915181331,
+      "y": 1807.707380912046,
+      "width": 200.0,
+      "height": 80.0,
+      "text": "Camera Transform\nworld = screen/zoom + offset\nscreen = (world - offset)*zoom",
+      "node_type": "text"
     }
   ],
   "edges": [
     {
-      "id": "edge-1",
-      "from_node": "welcome-1",
-      "to_node": "feature-1"
+      "id": "e1",
+      "from_node": "root",
+      "to_node": "frontend"
     },
     {
-      "id": "edge-3",
-      "from_node": "welcome-1",
-      "to_node": "feature-3"
+      "id": "e2",
+      "from_node": "root",
+      "to_node": "backend"
     },
     {
-      "id": "edge-claude-1",
-      "from_node": "claude-added-1",
-      "to_node": "claude-added-2"
+      "id": "e3",
+      "from_node": "root",
+      "to_node": "data"
     },
     {
-      "id": "edge-claude-2",
-      "from_node": "claude-added-2",
-      "to_node": "claude-added-3"
+      "id": "e4",
+      "from_node": "frontend",
+      "to_node": "fe-app"
     },
     {
-      "id": "edge-claude-connect",
-      "from_node": "welcome-1",
-      "to_node": "claude-added-1"
+      "id": "e5",
+      "from_node": "frontend",
+      "to_node": "fe-canvas"
+    },
+    {
+      "id": "e6",
+      "from_node": "frontend",
+      "to_node": "fe-state"
+    },
+    {
+      "id": "e7",
+      "from_node": "backend",
+      "to_node": "be-lib"
+    },
+    {
+      "id": "e8",
+      "from_node": "be-lib",
+      "to_node": "be-watcher"
+    },
+    {
+      "id": "e10",
+      "from_node": "data",
+      "to_node": "data-tauri"
+    },
+    {
+      "id": "e11",
+      "from_node": "data",
+      "to_node": "data-browser"
+    },
+    {
+      "id": "e12",
+      "from_node": "root",
+      "to_node": "node-types"
+    },
+    {
+      "id": "e13",
+      "from_node": "node-types",
+      "to_node": "type-text"
+    },
+    {
+      "id": "e14",
+      "from_node": "node-types",
+      "to_node": "type-idea"
+    },
+    {
+      "id": "e15",
+      "from_node": "node-types",
+      "to_node": "type-note"
+    },
+    {
+      "id": "e15b",
+      "from_node": "node-types",
+      "to_node": "type-image"
+    },
+    {
+      "id": "e15c",
+      "from_node": "node-types",
+      "to_node": "type-md"
+    },
+    {
+      "id": "e15d",
+      "from_node": "node-types",
+      "to_node": "type-link"
+    },
+    {
+      "id": "e16",
+      "from_node": "root",
+      "to_node": "features"
+    },
+    {
+      "id": "e17",
+      "from_node": "features",
+      "to_node": "feat-sync"
+    },
+    {
+      "id": "e18",
+      "from_node": "features",
+      "to_node": "feat-agent"
+    },
+    {
+      "id": "e20",
+      "from_node": "frontend",
+      "to_node": "leptos-hub"
+    },
+    {
+      "id": "e21",
+      "from_node": "leptos-hub",
+      "to_node": "leptos-what"
+    },
+    {
+      "id": "e22",
+      "from_node": "leptos-what",
+      "to_node": "leptos-signals"
+    },
+    {
+      "id": "e23",
+      "from_node": "leptos-hub",
+      "to_node": "leptos-why"
+    },
+    {
+      "id": "e24",
+      "from_node": "leptos-hub",
+      "to_node": "leptos-alts"
+    },
+    {
+      "id": "e25",
+      "from_node": "leptos-alts",
+      "to_node": "alt-yew"
+    },
+    {
+      "id": "e26",
+      "from_node": "leptos-alts",
+      "to_node": "alt-dioxus"
+    },
+    {
+      "id": "e27",
+      "from_node": "leptos-alts",
+      "to_node": "alt-sycamore"
+    },
+    {
+      "id": "e28",
+      "from_node": "leptos-hub",
+      "to_node": "link-leptos-docs"
+    },
+    {
+      "id": "e29",
+      "from_node": "leptos-hub",
+      "to_node": "link-leptos-book"
+    },
+    {
+      "id": "e30",
+      "from_node": "root",
+      "to_node": "research-hub"
+    },
+    {
+      "id": "e31",
+      "from_node": "research-hub",
+      "to_node": "research-studied"
+    },
+    {
+      "id": "e32",
+      "from_node": "research-hub",
+      "to_node": "research-decision"
+    },
+    {
+      "id": "e33",
+      "from_node": "research-studied",
+      "to_node": "study-figma"
+    },
+    {
+      "id": "e34",
+      "from_node": "research-studied",
+      "to_node": "study-femtovg"
+    },
+    {
+      "id": "e35",
+      "from_node": "research-studied",
+      "to_node": "study-wgpu"
+    },
+    {
+      "id": "e36",
+      "from_node": "research-studied",
+      "to_node": "study-excalidraw"
+    },
+    {
+      "id": "e37",
+      "from_node": "research-studied",
+      "to_node": "study-graphite"
+    },
+    {
+      "id": "e38",
+      "from_node": "research-decision",
+      "to_node": "decision-leptos"
+    },
+    {
+      "id": "e39",
+      "from_node": "decision-leptos",
+      "to_node": "decision-why"
+    },
+    {
+      "id": "e40",
+      "from_node": "research-hub",
+      "to_node": "research-validated"
+    },
+    {
+      "id": "e41",
+      "from_node": "research-hub",
+      "to_node": "link-obsidian-research"
+    },
+    {
+      "id": "e42",
+      "from_node": "features",
+      "to_node": "future-ideas"
+    },
+    {
+      "id": "e43",
+      "from_node": "future-ideas",
+      "to_node": "future-md-links"
+    },
+    {
+      "id": "e44",
+      "from_node": "future-ideas",
+      "to_node": "future-undo"
+    },
+    {
+      "id": "e45",
+      "from_node": "future-ideas",
+      "to_node": "future-crdt"
+    },
+    {
+      "id": "e50",
+      "from_node": "data",
+      "to_node": "arch-deep"
+    },
+    {
+      "id": "e51",
+      "from_node": "arch-deep",
+      "to_node": "arch-app-detail"
+    },
+    {
+      "id": "e52",
+      "from_node": "arch-deep",
+      "to_node": "arch-canvas-detail"
+    },
+    {
+      "id": "e53",
+      "from_node": "arch-deep",
+      "to_node": "arch-state-detail"
+    },
+    {
+      "id": "e54",
+      "from_node": "arch-deep",
+      "to_node": "arch-backend-detail"
+    },
+    {
+      "id": "e55",
+      "from_node": "arch-app-detail",
+      "to_node": "app-signals"
+    },
+    {
+      "id": "e56",
+      "from_node": "arch-app-detail",
+      "to_node": "app-effects"
+    },
+    {
+      "id": "e57",
+      "from_node": "arch-app-detail",
+      "to_node": "app-handlers"
+    },
+    {
+      "id": "e58",
+      "from_node": "arch-app-detail",
+      "to_node": "app-views"
+    },
+    {
+      "id": "e59",
+      "from_node": "arch-canvas-detail",
+      "to_node": "canvas-render"
+    },
+    {
+      "id": "e60",
+      "from_node": "arch-canvas-detail",
+      "to_node": "canvas-draw-node"
+    },
+    {
+      "id": "e61",
+      "from_node": "arch-canvas-detail",
+      "to_node": "canvas-caches"
+    },
+    {
+      "id": "e62",
+      "from_node": "arch-state-detail",
+      "to_node": "state-board"
+    },
+    {
+      "id": "e63",
+      "from_node": "arch-state-detail",
+      "to_node": "state-node"
+    },
+    {
+      "id": "e64",
+      "from_node": "arch-state-detail",
+      "to_node": "state-camera"
+    },
+    {
+      "id": "e65",
+      "from_node": "arch-state-detail",
+      "to_node": "state-edge"
+    },
+    {
+      "id": "e66",
+      "from_node": "arch-backend-detail",
+      "to_node": "be-commands"
+    },
+    {
+      "id": "e67",
+      "from_node": "arch-backend-detail",
+      "to_node": "be-watcher-detail"
+    },
+    {
+      "id": "e68",
+      "from_node": "arch-backend-detail",
+      "to_node": "be-link-preview"
+    },
+    {
+      "id": "e69",
+      "from_node": "arch-deep",
+      "to_node": "arch-dataflow"
+    },
+    {
+      "id": "e70",
+      "from_node": "arch-dataflow",
+      "to_node": "flow-user-edit"
+    },
+    {
+      "id": "e71",
+      "from_node": "arch-dataflow",
+      "to_node": "flow-external-edit"
+    },
+    {
+      "id": "e72",
+      "from_node": "arch-dataflow",
+      "to_node": "flow-skip-reload"
+    },
+    {
+      "id": "e73",
+      "from_node": "arch-deep",
+      "to_node": "arch-ipc"
+    },
+    {
+      "id": "e74",
+      "from_node": "arch-ipc",
+      "to_node": "ipc-invoke"
+    },
+    {
+      "id": "e75",
+      "from_node": "arch-ipc",
+      "to_node": "ipc-listen"
+    },
+    {
+      "id": "e76",
+      "from_node": "arch-deep",
+      "to_node": "arch-coords"
+    },
+    {
+      "id": "e77",
+      "from_node": "arch-coords",
+      "to_node": "coords-world"
+    },
+    {
+      "id": "e78",
+      "from_node": "arch-coords",
+      "to_node": "coords-screen"
+    },
+    {
+      "id": "e79",
+      "from_node": "coords-world",
+      "to_node": "coords-transform"
+    },
+    {
+      "id": "e80",
+      "from_node": "coords-screen",
+      "to_node": "coords-transform"
     }
   ]
 }

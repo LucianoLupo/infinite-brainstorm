@@ -1,0 +1,71 @@
+{
+  "nodes": [
+    {
+      "id": "welcome-1",
+      "x": 0.0,
+      "y": 0.0,
+      "width": 300.0,
+      "height": 120.0,
+      "text": "Welcome to Infinite Brainstorm!",
+      "node_type": "idea"
+    },
+    {
+      "id": "feature-1",
+      "x": 350.0,
+      "y": -80.0,
+      "width": 250.0,
+      "height": 100.0,
+      "text": "Double-click to create nodes",
+      "node_type": "text"
+    },
+    {
+      "id": "feature-2",
+      "x": 350.0,
+      "y": 40.0,
+      "width": 250.0,
+      "height": 100.0,
+      "text": "Shift+drag to connect ideas",
+      "node_type": "text"
+    },
+    {
+      "id": "feature-3",
+      "x": 350.0,
+      "y": 160.0,
+      "width": 250.0,
+      "height": 100.0,
+      "text": "Press T to cycle node types",
+      "node_type": "note"
+    },
+    {
+      "id": "ai-note",
+      "x": -350.0,
+      "y": 0.0,
+      "width": 280.0,
+      "height": 120.0,
+      "text": "AI assistants can edit this file directly!",
+      "node_type": "idea"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-1",
+      "from_node": "welcome-1",
+      "to_node": "feature-1"
+    },
+    {
+      "id": "edge-2",
+      "from_node": "welcome-1",
+      "to_node": "feature-2"
+    },
+    {
+      "id": "edge-3",
+      "from_node": "welcome-1",
+      "to_node": "feature-3"
+    },
+    {
+      "id": "edge-4",
+      "from_node": "welcome-1",
+      "to_node": "ai-note"
+    }
+  ]
+}

@@ -12,27 +12,31 @@ This app is optimized for AI collaboration:
 2. **File watching = instant sync** - Edit the file, the canvas updates in <100ms.
 3. **Simple schema** - Nodes have `id`, `x`, `y`, `width`, `height`, `text`, `node_type`. Edges connect nodes by ID.
 4. **Predictable layouts** - Grid is 50px. Nodes default to 200x100. Easy to calculate positions programmatically.
+5. **Directory-based projects** - Each folder can have its own `board.json`, like how git repos work.
 
 **When to use the UI vs Claude Code:**
 - UI: Exploring, panning, zooming, quick manual edits
 - Claude Code: Bulk operations, generating content, reorganizing, connecting ideas
 
-## Quick Reference for Claude Code
+## Quick Start for Claude Code
 
-**File location (Tauri desktop mode):**
-```
-# Uses current working directory where `cargo tauri dev` is run
-./board.json
+**Launch the app in current directory:**
+```bash
+brainstorm
+# or
+brainstorm /path/to/project
 ```
 
-**Browser mode:** Data is stored in `localStorage` under key `infinite-brainstorm-board`.
+**File location:** `./board.json` in current working directory
+
+**Browser mode:** Data stored in `localStorage` under key `infinite-brainstorm-board`
 
 **Minimal node:**
 ```json
 {"id": "uuid", "x": 0, "y": 0, "width": 200, "height": 100, "text": "Hello", "node_type": "text"}
 ```
 
-**Node types:** `"text"` (gray), `"idea"` (green-ish), `"note"` (amber), `"image"` (blue-ish), `"md"` (purple-ish), `"link"` (indigo)
+**Node types:** `"text"` (gray), `"idea"` (green), `"note"` (amber), `"image"` (blue), `"md"` (purple), `"link"` (indigo)
 
 **Edge:** `{"id": "uuid", "from_node": "node-id-1", "to_node": "node-id-2"}`
 
@@ -40,7 +44,6 @@ This app is optimized for AI collaboration:
 
 ### Read the current board state
 ```bash
-# In the directory where you ran `cargo tauri dev`
 cat ./board.json
 ```
 
@@ -100,10 +103,11 @@ Read the file, parse JSON, append nodes with calculated positions, write back. U
 **Key architectural decisions:**
 
 - **File watching enables AI collaboration**: The app watches `board.json` for external changes. When Claude Code edits this file, the canvas updates immediately.
+- **Skip-reload flag**: Prevents file watcher from reloading after the app's own saves (avoids feedback loops).
 - **Camera transforms**: Screen coordinates ↔ world coordinates via `Camera.screen_to_world()` / `world_to_screen()`. Zoom is centered on cursor position.
 - **Leptos signals**: Reactive state updates trigger canvas re-render via `Effect::new`.
 
-## Getting Started
+## Development Setup
 
 ### Prerequisites
 
@@ -121,7 +125,7 @@ cargo install tauri-cli
 cargo install wasm-bindgen-cli --version 0.2.108
 ```
 
-### Running
+### Running in Development
 
 ```bash
 cd ~/projects/infinite-brainstorm
@@ -129,6 +133,30 @@ cargo tauri dev
 ```
 
 Frontend builds via Trunk at `http://localhost:1420`, Tauri wraps it in a native window.
+
+### Building for Release
+
+```bash
+cargo tauri build
+```
+
+Binary output: `target/release/infinite-brainstorm`
+
+### Installing the CLI
+
+After building:
+```bash
+# The brainstorm script is already set up at:
+~/.local/bin/brainstorm
+
+# Make sure ~/.local/bin is in your PATH
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+
+# Now use from any directory:
+brainstorm
+brainstorm /path/to/project
+```
 
 ## Code Organization
 
@@ -147,10 +175,10 @@ infinite-brainstorm/
 │   │   └── default.json     # fs:allow-*, event:allow-*
 │   ├── Cargo.toml           # Backend deps (tauri, notify, serde, reqwest, scraper)
 │   └── tauri.conf.json      # App config, window settings
-├── public/
-│   └── board.json           # Template (not used at runtime)
+├── scripts/
+│   └── brainstorm           # CLI launcher script
 ├── Cargo.toml               # Frontend deps (leptos, web-sys, uuid)
-└── Trunk.toml               # WASM build config
+└── Trunk.toml               # WASM build config (ignores board.json)
 ```
 
 ## board.json Schema
@@ -272,6 +300,9 @@ infinite-brainstorm/
 - ✅ Image nodes (thumbnail + modal preview)
 - ✅ Markdown nodes (rendered HTML + edit modal)
 - ✅ Link nodes (OG preview card, click to copy, double-click to open)
+- ✅ Directory-based projects (board.json per folder)
+- ✅ CLI launcher (`brainstorm` command)
+- ✅ Dual storage (Tauri filesystem + browser localStorage)
 
 **Not Yet Implemented:**
 - **Undo/redo** - History stack for Ctrl+Z/Y
@@ -293,12 +324,24 @@ Install manually:
 cargo install wasm-bindgen-cli --version 0.2.108
 ```
 
-### board.json not found
+### App restarts on every interaction
 
-The app auto-creates it at first run in `~/Library/Application Support/com.lucianolupo.infinite-brainstorm/`.
+Make sure `Trunk.toml` ignores `board.json`:
+```toml
+[watch]
+ignore = ["./src-tauri", "./board.json"]
+```
 
-### File watcher not detecting changes
+### File watcher not detecting external changes
 
-- Check if the file watcher thread started (look for "Failed to watch" in console)
 - The watcher has a 500ms poll interval + 100ms debounce delay
 - Ensure the parent directory exists
+- Check for "Failed to watch" errors in console
+
+### brainstorm command not found
+
+```bash
+# Ensure ~/.local/bin is in PATH
+echo $PATH | grep -q '.local/bin' || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```

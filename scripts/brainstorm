@@ -1,0 +1,26 @@
+#!/bin/bash
+# Infinite Brainstorm CLI launcher
+# Usage: brainstorm [path]
+#   path: Directory to use for board.json (default: current directory)
+
+BINARY="/Users/lucianolupo/projects/infinite-brainstorm/target/release/infinite-brainstorm"
+
+if [ ! -f "$BINARY" ]; then
+    echo "Error: Binary not found at $BINARY"
+    echo "Run 'cargo tauri build' in the infinite-brainstorm directory first."
+    exit 1
+fi
+
+# Get target directory (default to current)
+TARGET_DIR="${1:-.}"
+
+# Resolve to absolute path
+TARGET_DIR="$(cd "$TARGET_DIR" 2>/dev/null && pwd)"
+
+if [ -z "$TARGET_DIR" ]; then
+    echo "Error: Directory '$1' not found"
+    exit 1
+fi
+
+# Launch the app from the target directory
+cd "$TARGET_DIR" && exec "$BINARY"

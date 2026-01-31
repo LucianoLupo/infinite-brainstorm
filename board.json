@@ -11,8 +11,8 @@
     },
     {
       "id": "feature-1",
-      "x": 667.0,
-      "y": -209.0,
+      "x": 390.76805633501226,
+      "y": -198.76918727166708,
       "width": 250.0,
       "height": 100.0,
       "text": "Now loads from current directory",
@@ -20,17 +20,17 @@
     },
     {
       "id": "feature-2",
-      "x": 696.0,
-      "y": -35.0,
+      "x": 591.134169534588,
+      "y": 81.37549478478651,
       "width": 250.0,
       "height": 100.0,
-      "text": "Works in browser with localStorage",
+      "text": "Works in browser with  localStorage",
       "node_type": "text"
     },
     {
       "id": "feature-3",
-      "x": 350.0,
-      "y": 198.0,
+      "x": 312.9133038597933,
+      "y": 302.86583046541205,
       "width": 250.0,
       "height": 100.0,
       "text": "Auto-detects Tauri vs Browser",

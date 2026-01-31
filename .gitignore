@@ -2,8 +2,37 @@
 /dist/
 /target/
 
+# User data (each project has its own board)
+board.json
+
 # macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
 
 # Logs
 *.log
+
+# Rust
+**/*.rs.bk
+Cargo.lock
+
+# Tauri
+/src-tauri/target/
+
+# Trunk
+/.trunk/

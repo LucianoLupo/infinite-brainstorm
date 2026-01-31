@@ -1,8 +1,10 @@
-use crate::state::{Board, Camera, Node};
-use std::collections::HashSet;
+use crate::state::{Board, Camera, LinkPreview, Node};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
+use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlImageElement};
 
 const BG_COLOR: &str = "#020202";
 const GRID_COLOR: &str = "#0a1a0a";
@@ -13,11 +15,17 @@ const TEXT_DIM: &str = "#66cc88";
 const NODE_BG_TEXT: &str = "#040804";
 const NODE_BG_IDEA: &str = "#041004";
 const NODE_BG_NOTE: &str = "#0a0a04";
+const NODE_BG_IMAGE: &str = "#040408";
+const NODE_BG_MD: &str = "#080408";
+const NODE_BG_LINK: &str = "#040410";
 const EDGE_COLOR: &str = "#33aa55";
 const EDGE_PREVIEW: &str = "#aaffbb";
 const SELECT_BOX_FILL: &str = "rgba(100, 200, 130, 0.15)";
 const SELECT_BOX_STROKE: &str = "#aaffbb";
 const FONT: &str = "JetBrains Mono, Fira Code, Consolas, monospace";
+
+pub type ImageCache = Rc<RefCell<HashMap<String, Option<HtmlImageElement>>>>;
+pub type LinkPreviewCache = Rc<RefCell<HashMap<String, Option<LinkPreview>>>>;
 
 pub fn render_board(
     ctx: &CanvasRenderingContext2d,
@@ -29,6 +37,8 @@ pub fn render_board(
     editing_node: Option<&String>,
     edge_preview: Option<(Option<&String>, f64, f64)>,
     selection_box: Option<(f64, f64, f64, f64)>,
+    image_cache: &ImageCache,
+    link_preview_cache: &LinkPreviewCache,
 ) {
     let width = canvas.width() as f64;
     let height = canvas.height() as f64;
@@ -50,7 +60,7 @@ pub fn render_board(
     for node in &board.nodes {
         let is_selected = selected_nodes.contains(&node.id);
         let is_editing = editing_node.map_or(false, |id| id == &node.id);
-        draw_node(ctx, node, camera, is_selected, is_editing);
+        draw_node(ctx, node, camera, is_selected, is_editing, image_cache, link_preview_cache);
     }
 
     if let Some((min_x, min_y, max_x, max_y)) = selection_box {
@@ -89,7 +99,15 @@ fn draw_grid(ctx: &CanvasRenderingContext2d, camera: &Camera, width: f64, height
     }
 }
 
-fn draw_node(ctx: &CanvasRenderingContext2d, node: &Node, camera: &Camera, is_selected: bool, is_editing: bool) {
+fn draw_node(
+    ctx: &CanvasRenderingContext2d,
+    node: &Node,
+    camera: &Camera,
+    is_selected: bool,
+    is_editing: bool,
+    image_cache: &ImageCache,
+    link_preview_cache: &LinkPreviewCache,
+) {
     let (screen_x, screen_y) = camera.world_to_screen(node.x, node.y);
     let screen_width = node.width * camera.zoom;
     let screen_height = node.height * camera.zoom;
@@ -97,6 +115,9 @@ fn draw_node(ctx: &CanvasRenderingContext2d, node: &Node, camera: &Camera, is_se
     let bg_color = match node.node_type.as_str() {
         "idea" => NODE_BG_IDEA,
         "note" => NODE_BG_NOTE,
+        "image" => NODE_BG_IMAGE,
+        "md" => NODE_BG_MD,
+        "link" => NODE_BG_LINK,
         _ => NODE_BG_TEXT,
     };
     ctx.set_fill_style_str(bg_color);
@@ -115,23 +136,39 @@ fn draw_node(ctx: &CanvasRenderingContext2d, node: &Node, camera: &Camera, is_se
     ctx.stroke_rect(screen_x, screen_y, screen_width, screen_height);
     ctx.set_shadow_blur(0.0);
 
-    if !is_editing {
-        ctx.set_fill_style_str(if is_selected { TEXT_COLOR } else { TEXT_DIM });
-        let font_size = (12.0 * camera.zoom).max(8.0);
-        ctx.set_font(&format!("{}px {}", font_size, FONT));
-        ctx.set_text_align("center");
-        ctx.set_text_baseline("middle");
+    match node.node_type.as_str() {
+        "image" => {
+            draw_image_content(ctx, node, camera, screen_x, screen_y, screen_width, screen_height, image_cache);
+        }
+        "link" => {
+            draw_link_content(ctx, node, camera, screen_x, screen_y, screen_width, screen_height, image_cache, link_preview_cache);
+        }
+        "md" => {
+            // MD nodes render their content via HTML overlay, just show background + label
+        }
+        _ => {
+            if !is_editing {
+                ctx.set_fill_style_str(if is_selected { TEXT_COLOR } else { TEXT_DIM });
+                let font_size = (12.0 * camera.zoom).max(8.0);
+                ctx.set_font(&format!("{}px {}", font_size, FONT));
+                ctx.set_text_align("center");
+                ctx.set_text_baseline("middle");
 
-        let text_x = screen_x + screen_width / 2.0;
-        let text_y = screen_y + screen_height / 2.0;
+                let text_x = screen_x + screen_width / 2.0;
+                let text_y = screen_y + screen_height / 2.0;
 
-        let max_width = screen_width - 16.0 * camera.zoom;
-        let _ = ctx.fill_text_with_max_width(&node.text, text_x, text_y, max_width);
+                let max_width = screen_width - 16.0 * camera.zoom;
+                let _ = ctx.fill_text_with_max_width(&node.text, text_x, text_y, max_width);
+            }
+        }
     }
 
     let type_indicator = match node.node_type.as_str() {
         "idea" => "[IDEA]",
         "note" => "[NOTE]",
+        "image" => "[IMAGE]",
+        "md" => "[MD]",
+        "link" => "[LINK]",
         _ => "[TEXT]",
     };
     ctx.set_fill_style_str(TEXT_DIM);
@@ -140,6 +177,171 @@ fn draw_node(ctx: &CanvasRenderingContext2d, node: &Node, camera: &Camera, is_se
     ctx.set_text_align("left");
     ctx.set_text_baseline("top");
     let _ = ctx.fill_text(type_indicator, screen_x + 4.0 * camera.zoom, screen_y + 4.0 * camera.zoom);
+}
+
+fn draw_image_content(
+    ctx: &CanvasRenderingContext2d,
+    node: &Node,
+    camera: &Camera,
+    screen_x: f64,
+    screen_y: f64,
+    screen_width: f64,
+    screen_height: f64,
+    image_cache: &ImageCache,
+) {
+    let url = &node.text;
+    let cache = image_cache.borrow();
+
+    match cache.get(url) {
+        Some(Some(img)) => {
+            // Image is loaded, draw it
+            let padding = 4.0 * camera.zoom;
+            let label_height = 16.0 * camera.zoom;
+            let img_x = screen_x + padding;
+            let img_y = screen_y + label_height + padding;
+            let img_max_w = screen_width - 2.0 * padding;
+            let img_max_h = screen_height - label_height - 2.0 * padding;
+
+            let natural_w = img.natural_width() as f64;
+            let natural_h = img.natural_height() as f64;
+
+            if natural_w > 0.0 && natural_h > 0.0 {
+                // Scale to fit the available space, allowing upscaling when zoomed in
+                let scale = (img_max_w / natural_w).min(img_max_h / natural_h);
+                let draw_w = natural_w * scale;
+                let draw_h = natural_h * scale;
+                let offset_x = (img_max_w - draw_w) / 2.0;
+                let offset_y = (img_max_h - draw_h) / 2.0;
+
+                let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(
+                    img,
+                    img_x + offset_x,
+                    img_y + offset_y,
+                    draw_w,
+                    draw_h,
+                );
+            }
+
+            // Show filename
+            let filename = url.rsplit('/').next().unwrap_or(url);
+            let truncated = if filename.len() > 20 {
+                format!("{}...", &filename[..17])
+            } else {
+                filename.to_string()
+            };
+            ctx.set_fill_style_str(TEXT_DIM);
+            let small_font = (9.0 * camera.zoom).max(6.0);
+            ctx.set_font(&format!("{}px {}", small_font, FONT));
+            ctx.set_text_align("right");
+            ctx.set_text_baseline("top");
+            let _ = ctx.fill_text(&truncated, screen_x + screen_width - 4.0 * camera.zoom, screen_y + 4.0 * camera.zoom);
+        }
+        Some(None) => {
+            // Image is loading
+            ctx.set_fill_style_str(TEXT_DIM);
+            let font_size = (12.0 * camera.zoom).max(8.0);
+            ctx.set_font(&format!("{}px {}", font_size, FONT));
+            ctx.set_text_align("center");
+            ctx.set_text_baseline("middle");
+            let _ = ctx.fill_text("Loading...", screen_x + screen_width / 2.0, screen_y + screen_height / 2.0);
+        }
+        None => {
+            // Image not in cache yet, show placeholder
+            ctx.set_fill_style_str(TEXT_DIM);
+            let font_size = (12.0 * camera.zoom).max(8.0);
+            ctx.set_font(&format!("{}px {}", font_size, FONT));
+            ctx.set_text_align("center");
+            ctx.set_text_baseline("middle");
+            let _ = ctx.fill_text("[No Image]", screen_x + screen_width / 2.0, screen_y + screen_height / 2.0);
+        }
+    }
+}
+
+fn draw_link_content(
+    ctx: &CanvasRenderingContext2d,
+    node: &Node,
+    camera: &Camera,
+    screen_x: f64,
+    screen_y: f64,
+    screen_width: f64,
+    screen_height: f64,
+    image_cache: &ImageCache,
+    link_preview_cache: &LinkPreviewCache,
+) {
+    let url = &node.text;
+    let cache = link_preview_cache.borrow();
+    let padding = 4.0 * camera.zoom;
+    let label_height = 16.0 * camera.zoom;
+    let domain_font_size = (9.0 * camera.zoom).max(6.0);
+
+    // Content bounds (inside node, below label)
+    let content_top = screen_y + label_height;
+    let content_bottom = screen_y + screen_height - padding;
+    let content_left = screen_x + padding;
+    let content_width = screen_width - 2.0 * padding;
+    let content_height = content_bottom - content_top - domain_font_size - padding;
+
+    // Use clipping to prevent drawing outside node
+    ctx.save();
+    ctx.begin_path();
+    ctx.rect(screen_x, screen_y, screen_width, screen_height);
+    ctx.clip();
+
+    match cache.get(url) {
+        Some(Some(preview)) => {
+            // Draw preview image - OG images usually contain title/desc already
+            if let Some(ref image_url) = preview.image {
+                let img_cache = image_cache.borrow();
+                if let Some(Some(img)) = img_cache.get(image_url) {
+                    let natural_w = img.natural_width() as f64;
+                    let natural_h = img.natural_height() as f64;
+
+                    if natural_w > 0.0 && natural_h > 0.0 && content_height > 10.0 {
+                        let scale = (content_width / natural_w).min(content_height / natural_h);
+                        let draw_w = natural_w * scale;
+                        let draw_h = natural_h * scale;
+                        let offset_x = (content_width - draw_w) / 2.0;
+
+                        let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(
+                            img,
+                            content_left + offset_x,
+                            content_top,
+                            draw_w,
+                            draw_h,
+                        );
+                    }
+                }
+            }
+
+            // Draw domain at bottom
+            let domain = preview.site_name.clone().unwrap_or_else(|| {
+                url.split('/').nth(2).unwrap_or(url).to_string()
+            });
+            ctx.set_fill_style_str(TEXT_DIM);
+            ctx.set_font(&format!("{}px {}", domain_font_size, FONT));
+            ctx.set_text_align("right");
+            ctx.set_text_baseline("bottom");
+            let _ = ctx.fill_text(&domain, screen_x + screen_width - padding, content_bottom);
+        }
+        Some(None) => {
+            ctx.set_fill_style_str(TEXT_DIM);
+            let font_size = (12.0 * camera.zoom).max(8.0);
+            ctx.set_font(&format!("{}px {}", font_size, FONT));
+            ctx.set_text_align("center");
+            ctx.set_text_baseline("middle");
+            let _ = ctx.fill_text("Loading...", screen_x + screen_width / 2.0, screen_y + screen_height / 2.0);
+        }
+        None => {
+            ctx.set_fill_style_str(TEXT_DIM);
+            let font_size = (10.0 * camera.zoom).max(7.0);
+            ctx.set_font(&format!("{}px {}", font_size, FONT));
+            ctx.set_text_align("center");
+            ctx.set_text_baseline("middle");
+            let _ = ctx.fill_text_with_max_width(url, screen_x + screen_width / 2.0, screen_y + screen_height / 2.0, content_width);
+        }
+    }
+
+    ctx.restore();
 }
 
 fn draw_edge(ctx: &CanvasRenderingContext2d, board: &Board, edge: &crate::state::Edge, camera: &Camera, is_selected: bool) {

@@ -29,7 +29,7 @@ This app is optimized for AI collaboration:
 {"id": "uuid", "x": 0, "y": 0, "width": 200, "height": 100, "text": "Hello", "node_type": "text"}
 ```
 
-**Node types:** `"text"` (gray), `"idea"` (purple), `"note"` (red)
+**Node types:** `"text"` (gray), `"idea"` (green-ish), `"note"` (amber), `"image"` (blue-ish), `"md"` (purple-ish), `"link"` (indigo)
 
 **Edge:** `{"id": "uuid", "from_node": "node-id-1", "to_node": "node-id-2"}`
 
@@ -80,7 +80,8 @@ Read the file, parse JSON, append nodes with calculated positions, write back. U
                                │ Tauri IPC (invoke/listen)
 ┌──────────────────────────────┴──────────────────────────────────────┐
 │                        Backend (Tauri/Rust)                         │
-│  src-tauri/src/lib.rs - Commands: load_board, save_board           │
+│  src-tauri/src/lib.rs - Commands: load_board, save_board,          │
+│                         fetch_link_preview                         │
 │                       - File watcher (notify crate)                 │
 │                       - Emits "board-changed" event on file modify  │
 └──────────────────────────────┬──────────────────────────────────────┘
@@ -140,7 +141,7 @@ infinite-brainstorm/
 │   │   └── lib.rs           # Commands + file watcher
 │   ├── capabilities/        # Tauri permissions
 │   │   └── default.json     # fs:allow-*, event:allow-*
-│   ├── Cargo.toml           # Backend deps (tauri, notify, serde)
+│   ├── Cargo.toml           # Backend deps (tauri, notify, serde, reqwest, scraper)
 │   └── tauri.conf.json      # App config, window settings
 ├── public/
 │   └── board.json           # Template (not used at runtime)
@@ -161,6 +162,33 @@ infinite-brainstorm/
       "height": 100.0,
       "text": "Node content",
       "node_type": "text"
+    },
+    {
+      "id": "image-uuid",
+      "x": 350.0,
+      "y": 200.0,
+      "width": 200.0,
+      "height": 150.0,
+      "text": "/Users/me/photos/diagram.png",
+      "node_type": "image"
+    },
+    {
+      "id": "md-uuid",
+      "x": 600.0,
+      "y": 200.0,
+      "width": 300.0,
+      "height": 200.0,
+      "text": "# Title\n\n- Item 1\n- Item 2\n\n**Bold** and *italic*",
+      "node_type": "md"
+    },
+    {
+      "id": "link-uuid",
+      "x": 950.0,
+      "y": 200.0,
+      "width": 280.0,
+      "height": 200.0,
+      "text": "https://github.com/anthropics/claude-code",
+      "node_type": "link"
     }
   ],
   "edges": [
@@ -174,9 +202,18 @@ infinite-brainstorm/
 ```
 
 **Node types and colors:**
-- `"idea"` → Purple background (`#4a4a8a`)
-- `"note"` → Red background (`#8a4a4a`)
-- `"text"` → Gray background (`#3a3a5a`) - default
+- `"text"` → Dark green background (`#040804`) - default
+- `"idea"` → Slightly brighter green (`#041004`)
+- `"note"` → Amber-green (`#0a0a04`)
+- `"image"` → Dark blue (`#040408`) - displays image thumbnail, double-click opens 90% modal
+- `"md"` → Dark purple (`#080408`) - renders markdown content
+- `"link"` → Dark indigo (`#040410`) - displays URL preview card with og:image, title, description
+
+**Image node:** Set `text` field to image path (local) or URL. Local paths are auto-converted to `asset://localhost/` URLs.
+
+**Markdown node:** Set `text` field to markdown content. Rendered HTML displays in the node.
+
+**Link node:** Set `text` field to a URL. Fetches Open Graph metadata and displays preview image. Click copies URL to clipboard, double-click opens in browser.
 
 ## Conventions
 
@@ -204,6 +241,7 @@ infinite-brainstorm/
 | Action | Behavior |
 |--------|----------|
 | Click node | Select node (green border) |
+| Click link node | Select + copy URL to clipboard |
 | Click edge | Select edge (glowing line) |
 | Ctrl/Cmd+click | Toggle node in multi-selection |
 | Drag node | Move all selected nodes, saves on release |
@@ -212,8 +250,11 @@ infinite-brainstorm/
 | Scroll wheel | Zoom (centered on cursor) |
 | Double-click empty | Create new node, enter edit mode |
 | Double-click node | Edit node text inline |
+| Double-click image | Open image in 90% viewport modal |
+| Double-click md | Open markdown editor modal |
+| Double-click link | Open URL in browser |
 | Shift+drag from node | Create edge to target node |
-| T | Cycle type on selected nodes |
+| T | Cycle type on selected nodes (text→idea→note→image→md→link) |
 | Delete/Backspace | Delete selected nodes or edge |
 | Escape | Clear selection, cancel editing |
 
@@ -224,6 +265,9 @@ infinite-brainstorm/
 - ✅ Edge creation (shift+drag)
 - ✅ Multi-select (ctrl+click, box select)
 - ✅ Edge deletion (click edge to select, delete key)
+- ✅ Image nodes (thumbnail + modal preview)
+- ✅ Markdown nodes (rendered HTML + edit modal)
+- ✅ Link nodes (OG preview card, click to copy, double-click to open)
 
 **Not Yet Implemented:**
 - **Undo/redo** - History stack for Ctrl+Z/Y

@@ -1,11 +1,15 @@
-use crate::canvas::{get_canvas_context, render_board};
-use crate::state::{Board, Camera, Edge, Node};
+use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache};
+use crate::state::{Board, Camera, Edge, LinkPreview, Node};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use pulldown_cmark::{html, Parser};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
-use web_sys::HtmlCanvasElement;
+use wasm_bindgen::JsCast;
+use web_sys::{HtmlCanvasElement, HtmlImageElement};
 
 #[wasm_bindgen]
 extern "C" {
@@ -19,6 +23,11 @@ extern "C" {
 #[derive(Serialize, Deserialize)]
 struct SaveBoardArgs {
     board: Board,
+}
+
+#[derive(Serialize, Deserialize)]
+struct FetchLinkPreviewArgs {
+    url: String,
 }
 
 #[derive(Clone, Default)]
@@ -63,7 +72,25 @@ fn cycle_node_type(current: &str) -> String {
     match current {
         "text" => "idea".to_string(),
         "idea" => "note".to_string(),
+        "note" => "image".to_string(),
+        "image" => "md".to_string(),
+        "md" => "link".to_string(),
         _ => "text".to_string(),
+    }
+}
+
+fn parse_markdown(md: &str) -> String {
+    let parser = Parser::new(md);
+    let mut html_output = String::new();
+    html::push_html(&mut html_output, parser);
+    html_output
+}
+
+fn convert_path_to_asset_url(path: &str) -> String {
+    if path.starts_with("http://") || path.starts_with("https://") {
+        path.to_string()
+    } else {
+        format!("asset://localhost{}", path)
     }
 }
 
@@ -99,7 +126,19 @@ pub fn App() -> impl IntoView {
     let (editing_node, set_editing_node) = signal::<Option<String>>(None);
     let (edge_creation, set_edge_creation) = signal(EdgeCreationState::default());
     let (selection_box, set_selection_box) = signal::<Option<(f64, f64, f64, f64)>>(None);
+    let (modal_image, set_modal_image) = signal::<Option<String>>(None);
+    let (modal_md, set_modal_md) = signal::<Option<(String, bool)>>(None); // (node_id, is_editing)
+    let (md_edit_text, set_md_edit_text) = signal::<String>(String::new()); // Separate signal to avoid re-render on typing
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
+    let image_cache: ImageCache = Rc::new(RefCell::new(HashMap::new()));
+    let image_cache_for_render = image_cache.clone();
+    let image_cache_for_load = image_cache.clone();
+    let image_cache_for_link_preview = image_cache.clone();
+    let link_preview_cache: LinkPreviewCache = Rc::new(RefCell::new(HashMap::new()));
+    let link_preview_cache_for_render = link_preview_cache.clone();
+    let link_preview_cache_for_fetch = link_preview_cache.clone();
+    let (image_load_trigger, set_image_load_trigger) = signal(0u32);
+    let (link_preview_trigger, set_link_preview_trigger) = signal(0u32);
 
     Effect::new(move || {
         spawn_local(async move {
@@ -126,6 +165,134 @@ pub fn App() -> impl IntoView {
         });
     });
 
+    // Image loading effect
+    Effect::new({
+        let image_cache = image_cache_for_load.clone();
+        move || {
+            let current_board = board.get();
+
+            for node in &current_board.nodes {
+                if node.node_type == "image" && !node.text.is_empty() {
+                    let url = node.text.clone();
+                    let asset_url = convert_path_to_asset_url(&url);
+
+                    let needs_load = {
+                        let cache = image_cache.borrow();
+                        !cache.contains_key(&url)
+                    };
+
+                    if needs_load {
+                        // Mark as loading
+                        image_cache.borrow_mut().insert(url.clone(), None);
+
+                        let img = HtmlImageElement::new().unwrap();
+                        let url_for_closure = url.clone();
+                        let cache_for_onload = image_cache.clone();
+                        let trigger = set_image_load_trigger;
+
+                        let onload_ref = Closure::wrap(Box::new({
+                            let img = img.clone();
+                            let cache = cache_for_onload.clone();
+                            let url = url_for_closure.clone();
+                            move || {
+                                cache.borrow_mut().insert(url.clone(), Some(img.clone()));
+                                trigger.update(|n| *n = n.wrapping_add(1));
+                            }
+                        }) as Box<dyn Fn()>);
+
+                        img.set_onload(Some(onload_ref.as_ref().unchecked_ref()));
+                        onload_ref.forget();
+
+                        let onerror = Closure::wrap(Box::new({
+                            let cache = image_cache.clone();
+                            let url = url.clone();
+                            move || {
+                                // Keep it as None to show loading failed
+                                cache.borrow_mut().insert(url.clone(), None);
+                            }
+                        }) as Box<dyn Fn()>);
+
+                        img.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+                        onerror.forget();
+
+                        img.set_src(&asset_url);
+                    }
+                }
+            }
+        }
+    });
+
+    // Link preview fetching effect
+    Effect::new({
+        let link_cache = link_preview_cache_for_fetch.clone();
+        let image_cache = image_cache_for_link_preview.clone();
+        move || {
+            let current_board = board.get();
+
+            for node in &current_board.nodes {
+                if node.node_type == "link" && !node.text.is_empty() {
+                    let url = node.text.clone();
+
+                    let needs_fetch = {
+                        let cache = link_cache.borrow();
+                        !cache.contains_key(&url)
+                    };
+
+                    if needs_fetch {
+                        // Mark as loading
+                        link_cache.borrow_mut().insert(url.clone(), None);
+
+                        let cache_for_result = link_cache.clone();
+                        let image_cache_for_result = image_cache.clone();
+                        let trigger = set_link_preview_trigger;
+                        let img_trigger = set_image_load_trigger;
+
+                        spawn_local(async move {
+                            let args = serde_wasm_bindgen::to_value(&FetchLinkPreviewArgs { url: url.clone() }).unwrap();
+                            let result = invoke("fetch_link_preview", args).await;
+
+                            if let Ok(preview) = serde_wasm_bindgen::from_value::<LinkPreview>(result) {
+                                // If preview has an image, start loading it
+                                if let Some(ref image_url) = preview.image {
+                                    let img_url = image_url.clone();
+                                    let needs_img_load = {
+                                        let cache = image_cache_for_result.borrow();
+                                        !cache.contains_key(&img_url)
+                                    };
+
+                                    if needs_img_load {
+                                        image_cache_for_result.borrow_mut().insert(img_url.clone(), None);
+
+                                        let img = HtmlImageElement::new().unwrap();
+                                        let cache_for_onload = image_cache_for_result.clone();
+                                        let url_for_closure = img_url.clone();
+
+                                        let onload = Closure::wrap(Box::new({
+                                            let img = img.clone();
+                                            let cache = cache_for_onload.clone();
+                                            let url = url_for_closure.clone();
+                                            move || {
+                                                cache.borrow_mut().insert(url.clone(), Some(img.clone()));
+                                                img_trigger.update(|n| *n = n.wrapping_add(1));
+                                            }
+                                        }) as Box<dyn Fn()>);
+
+                                        img.set_onload(Some(onload.as_ref().unchecked_ref()));
+                                        onload.forget();
+                                        img.set_src(&img_url);
+                                    }
+                                }
+
+                                cache_for_result.borrow_mut().insert(url, Some(preview));
+                                trigger.update(|n| *n = n.wrapping_add(1));
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    });
+
     Effect::new(move || {
         let current_board = board.get();
         let current_camera = camera.get();
@@ -134,6 +301,8 @@ pub fn App() -> impl IntoView {
         let current_editing = editing_node.get();
         let current_edge_creation = edge_creation.get();
         let current_selection_box = selection_box.get();
+        let _ = image_load_trigger.get(); // Subscribe to image loads
+        let _ = link_preview_trigger.get(); // Subscribe to link preview loads
 
         if let Some(canvas) = canvas_ref.get() {
             let canvas_el: &HtmlCanvasElement = &canvas;
@@ -166,6 +335,8 @@ pub fn App() -> impl IntoView {
                         )
                     }),
                     current_selection_box,
+                    &image_cache_for_render,
+                    &link_preview_cache_for_render,
                 );
             }
         }
@@ -211,6 +382,17 @@ pub fn App() -> impl IntoView {
                     });
                 } else if !current_selected.contains(&node.id) {
                     set_selected_nodes.set([node.id.clone()].into_iter().collect());
+                }
+
+                // Copy link URL to clipboard when clicking a link node
+                if node.node_type == "link" && !node.text.is_empty() {
+                    let url = node.text.clone();
+                    spawn_local(async move {
+                        if let Some(window) = web_sys::window() {
+                            let clipboard = window.navigator().clipboard();
+                            let _ = wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&url)).await;
+                        }
+                    });
                 }
 
                 let selected = selected_nodes.get_untracked();
@@ -432,7 +614,22 @@ pub fn App() -> impl IntoView {
             .find(|n| n.contains_point(world_x, world_y));
 
         if let Some(node) = clicked_node {
-            set_editing_node.set(Some(node.id.clone()));
+            if node.node_type == "image" {
+                // Open image in modal
+                let url = convert_path_to_asset_url(&node.text);
+                set_modal_image.set(Some(url));
+            } else if node.node_type == "md" {
+                // Open MD in modal (view mode)
+                set_modal_md.set(Some((node.id.clone(), false)));
+            } else if node.node_type == "link" {
+                // Open link in browser
+                if let Some(window) = web_sys::window() {
+                    let _ = window.open_with_url_and_target(&node.text, "_blank");
+                }
+            } else {
+                // Edit mode for text, idea, note nodes
+                set_editing_node.set(Some(node.id.clone()));
+            }
         } else {
             let new_node = Node::new(
                 uuid::Uuid::new_v4().to_string(),
@@ -515,6 +712,8 @@ pub fn App() -> impl IntoView {
                 set_editing_node.set(None);
                 set_edge_creation.set(EdgeCreationState::default());
                 set_selection_box.set(None);
+                set_modal_image.set(None);
+                set_modal_md.set(None);
             }
             _ => {}
         }
@@ -530,79 +729,345 @@ pub fn App() -> impl IntoView {
                 let screen_h = node.height * cam.zoom;
                 let font_size = (14.0 * cam.zoom).max(8.0);
                 let initial_text = node.text.clone();
+                let is_md = node.node_type == "md";
 
-                let node_id_for_blur = node_id.clone();
-                let on_blur = move |ev: web_sys::FocusEvent| {
-                    if let Some(target) = ev.target() {
-                        if let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() {
-                            let new_text = input.value();
-                            let node_id_clone = node_id_for_blur.clone();
-                            set_board.update(|b| {
-                                if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
-                                    node.text = new_text;
-                                }
-                            });
+                if is_md {
+                    // MD nodes use textarea for multi-line editing
+                    let node_id_for_blur = node_id.clone();
+                    let on_blur_textarea = move |ev: web_sys::FocusEvent| {
+                        if let Some(target) = ev.target() {
+                            if let Ok(textarea) = target.dyn_into::<web_sys::HtmlTextAreaElement>() {
+                                let new_text = textarea.value();
+                                let node_id_clone = node_id_for_blur.clone();
+                                set_board.update(|b| {
+                                    if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
+                                        node.text = new_text;
+                                    }
+                                });
 
-                            let current_board = board.get_untracked();
-                            spawn_local(async move {
-                                let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                                let _ = invoke("save_board", args).await;
-                            });
-                        }
-                    }
-                    set_editing_node.set(None);
-                };
-
-                let node_id_for_keydown = node_id.clone();
-                let on_keydown = move |ev: web_sys::KeyboardEvent| {
-                    match ev.key().as_str() {
-                        "Enter" => {
-                            if let Some(target) = ev.target() {
-                                if let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() {
-                                    let new_text = input.value();
-                                    let node_id_clone = node_id_for_keydown.clone();
-                                    set_board.update(|b| {
-                                        if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
-                                            node.text = new_text;
-                                        }
-                                    });
-
-                                    let current_board = board.get_untracked();
-                                    spawn_local(async move {
-                                        let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
-                                        let _ = invoke("save_board", args).await;
-                                    });
-                                    set_editing_node.set(None);
-                                }
+                                let current_board = board.get_untracked();
+                                spawn_local(async move {
+                                    let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
+                                    let _ = invoke("save_board", args).await;
+                                });
                             }
                         }
-                        "Escape" => {
-                            set_editing_node.set(None);
-                        }
-                        _ => {}
-                    }
-                };
+                        set_editing_node.set(None);
+                    };
 
-                return Some(view! {
-                    <input
-                        type="text"
-                        value=initial_text
-                        autofocus=true
-                        style=format!(
-                            "position: absolute; left: {}px; top: {}px; width: {}px; height: {}px; \
-                             font-size: {}px; text-align: center; background: #020202; \
-                             color: #ccffdd; border: 1px solid #aaffbb; outline: none; \
-                             box-sizing: border-box; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
-                             text-shadow: 0 0 6px #aaffbb;",
-                            screen_x, screen_y, screen_w, screen_h, font_size
-                        )
-                        on:blur=on_blur
-                        on:keydown=on_keydown
-                    />
-                });
+                    let node_id_for_keydown = node_id.clone();
+                    let on_keydown_textarea = move |ev: web_sys::KeyboardEvent| {
+                        match ev.key().as_str() {
+                            "Escape" => {
+                                if let Some(target) = ev.target() {
+                                    if let Ok(textarea) = target.dyn_into::<web_sys::HtmlTextAreaElement>() {
+                                        let new_text = textarea.value();
+                                        let node_id_clone = node_id_for_keydown.clone();
+                                        set_board.update(|b| {
+                                            if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
+                                                node.text = new_text;
+                                            }
+                                        });
+
+                                        let current_board = board.get_untracked();
+                                        spawn_local(async move {
+                                            let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
+                                            let _ = invoke("save_board", args).await;
+                                        });
+                                    }
+                                }
+                                set_editing_node.set(None);
+                            }
+                            _ => {}
+                        }
+                    };
+
+                    return Some(view! {
+                        <textarea
+                            autofocus=true
+                            style=format!(
+                                "position: absolute; left: {}px; top: {}px; width: {}px; height: {}px; \
+                                 font-size: {}px; background: #020202; resize: none; \
+                                 color: #ccffdd; border: 1px solid #aaffbb; outline: none; \
+                                 box-sizing: border-box; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
+                                 text-shadow: 0 0 6px #aaffbb; padding: 8px;",
+                                screen_x, screen_y, screen_w, screen_h, font_size
+                            )
+                            on:blur=on_blur_textarea
+                            on:keydown=on_keydown_textarea
+                        >{initial_text}</textarea>
+                    }.into_any());
+                } else {
+                    // Regular nodes use input
+                    let node_id_for_blur = node_id.clone();
+                    let on_blur = move |ev: web_sys::FocusEvent| {
+                        if let Some(target) = ev.target() {
+                            if let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() {
+                                let new_text = input.value();
+                                let node_id_clone = node_id_for_blur.clone();
+                                set_board.update(|b| {
+                                    if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
+                                        node.text = new_text;
+                                    }
+                                });
+
+                                let current_board = board.get_untracked();
+                                spawn_local(async move {
+                                    let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
+                                    let _ = invoke("save_board", args).await;
+                                });
+                            }
+                        }
+                        set_editing_node.set(None);
+                    };
+
+                    let node_id_for_keydown = node_id.clone();
+                    let on_keydown = move |ev: web_sys::KeyboardEvent| {
+                        match ev.key().as_str() {
+                            "Enter" => {
+                                if let Some(target) = ev.target() {
+                                    if let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() {
+                                        let new_text = input.value();
+                                        let node_id_clone = node_id_for_keydown.clone();
+                                        set_board.update(|b| {
+                                            if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
+                                                node.text = new_text;
+                                            }
+                                        });
+
+                                        let current_board = board.get_untracked();
+                                        spawn_local(async move {
+                                            let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
+                                            let _ = invoke("save_board", args).await;
+                                        });
+                                        set_editing_node.set(None);
+                                    }
+                                }
+                            }
+                            "Escape" => {
+                                set_editing_node.set(None);
+                            }
+                            _ => {}
+                        }
+                    };
+
+                    return Some(view! {
+                        <input
+                            type="text"
+                            value=initial_text
+                            autofocus=true
+                            style=format!(
+                                "position: absolute; left: {}px; top: {}px; width: {}px; height: {}px; \
+                                 font-size: {}px; text-align: center; background: #020202; \
+                                 color: #ccffdd; border: 1px solid #aaffbb; outline: none; \
+                                 box-sizing: border-box; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
+                                 text-shadow: 0 0 6px #aaffbb;",
+                                screen_x, screen_y, screen_w, screen_h, font_size
+                            )
+                            on:blur=on_blur
+                            on:keydown=on_keydown
+                        />
+                    }.into_any());
+                }
             }
         }
         None
+    };
+
+    let md_overlays_view = move || {
+        let b = board.get();
+        let cam = camera.get();
+        let current_editing = editing_node.get();
+
+        b.nodes
+            .iter()
+            .filter(|n| n.node_type == "md" && current_editing.as_ref() != Some(&n.id))
+            .map(|node| {
+                let (screen_x, screen_y) = cam.world_to_screen(node.x, node.y);
+                let label_height = 16.0 * cam.zoom;
+                let html_content = parse_markdown(&node.text);
+
+                // Use transform to scale content uniformly
+                // Container is sized at 1x zoom, transform scales it
+                let base_w = node.width;
+                let base_h = node.height - 16.0; // Account for label
+                let base_padding = 8.0;
+
+                view! {
+                    <div
+                        style=format!(
+                            "position: absolute; left: {}px; top: {}px; \
+                             width: {}px; height: {}px; overflow: hidden; \
+                             transform: scale({}); transform-origin: top left; \
+                             padding: {}px; box-sizing: border-box; \
+                             color: #ccffdd; font-size: 12px; line-height: 1.4; \
+                             font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
+                             pointer-events: none;",
+                            screen_x, screen_y + label_height,
+                            base_w, base_h,
+                            cam.zoom,
+                            base_padding
+                        )
+                        inner_html=html_content
+                    />
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let modal_view = move || {
+        if let Some(image_url) = modal_image.get() {
+            Some(view! {
+                <div
+                    style="position: fixed; inset: 0; background: rgba(0,0,0,0.9); \
+                           display: flex; align-items: center; justify-content: center; \
+                           z-index: 1000; cursor: pointer;"
+                    on:click=move |_| set_modal_image.set(None)
+                >
+                    <img
+                        src=image_url
+                        style="max-width: 90vw; max-height: 90vh; object-fit: contain; \
+                               border: 1px solid #44dd66; box-shadow: 0 0 30px rgba(68, 221, 102, 0.3);"
+                    />
+                </div>
+            })
+        } else {
+            None
+        }
+    };
+
+    let md_modal_view = move || {
+        if let Some((node_id, is_editing)) = modal_md.get() {
+            let node_id_for_edit = node_id.clone();
+            let node_id_for_save = node_id.clone();
+            let node_id_for_content = node_id.clone();
+
+            Some(view! {
+                <div
+                    style="position: fixed; inset: 0; background: rgba(0,0,0,0.9); \
+                           display: flex; align-items: center; justify-content: center; \
+                           z-index: 1000;"
+                    on:click=move |_| set_modal_md.set(None)
+                >
+                    <div
+                        style="width: 90vw; max-width: 800px; height: 80vh; \
+                               background: #020202; border: 1px solid #44dd66; \
+                               box-shadow: 0 0 30px rgba(68, 221, 102, 0.3); \
+                               padding: 24px; display: flex; flex-direction: column; \
+                               font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
+                               color: #ccffdd; font-size: 14px; line-height: 1.6;"
+                        on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()
+                    >
+                        <div
+                            style="margin-bottom: 16px; padding-bottom: 16px; \
+                                   border-bottom: 1px solid #44dd66; \
+                                   display: flex; justify-content: flex-end; gap: 8px;"
+                        >
+                            {move || {
+                                let node_id = node_id_for_edit.clone();
+                                let node_id_save = node_id_for_save.clone();
+                                if is_editing {
+                                    view! {
+                                        <button
+                                            style="background: transparent; color: #66cc88; border: 1px solid #66cc88; \
+                                                   padding: 8px 16px; cursor: pointer; \
+                                                   font-family: inherit; font-size: 12px;"
+                                            on:click=move |_| {
+                                                // Cancel - revert to view mode
+                                                set_modal_md.set(Some((node_id.clone(), false)));
+                                            }
+                                        >
+                                            "Cancel"
+                                        </button>
+                                        <button
+                                            style="background: #44dd66; color: #020202; border: none; \
+                                                   padding: 8px 16px; cursor: pointer; \
+                                                   font-family: inherit; font-size: 12px; font-weight: bold;"
+                                            on:click=move |_| {
+                                                // Save - get content from edit signal and update board
+                                                let new_content = md_edit_text.get_untracked();
+                                                let nid = node_id_save.clone();
+                                                set_board.update(|b| {
+                                                    if let Some(node) = b.nodes.iter_mut().find(|n| n.id == nid) {
+                                                        node.text = new_content;
+                                                    }
+                                                });
+
+                                                let current_board = board.get_untracked();
+                                                spawn_local(async move {
+                                                    let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
+                                                    let _ = invoke("save_board", args).await;
+                                                });
+
+                                                // Switch back to view mode
+                                                set_modal_md.set(Some((node_id_save.clone(), false)));
+                                            }
+                                        >
+                                            "Save"
+                                        </button>
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        <button
+                                            style="background: #44dd66; color: #020202; border: none; \
+                                                   padding: 8px 16px; cursor: pointer; \
+                                                   font-family: inherit; font-size: 12px; font-weight: bold;"
+                                            on:click=move |_| {
+                                                // Enter edit mode - populate edit text from current board content
+                                                let b = board.get_untracked();
+                                                if let Some((id, _)) = modal_md.get_untracked() {
+                                                    if let Some(n) = b.nodes.iter().find(|n| n.id == id) {
+                                                        set_md_edit_text.set(n.text.clone());
+                                                    }
+                                                    set_modal_md.set(Some((id, true)));
+                                                }
+                                            }
+                                        >
+                                            "Edit"
+                                        </button>
+                                    }.into_any()
+                                }
+                            }}
+                        </div>
+                        <div style="flex: 1; overflow-y: auto; min-height: 0;">
+                            {move || {
+                                let nid = node_id_for_content.clone();
+                                if is_editing {
+                                    // Use md_edit_text signal for textarea - updates don't re-render modal
+                                    view! {
+                                        <textarea
+                                            style="width: 100%; height: 100%; background: #020202; \
+                                                   color: #ccffdd; border: 1px solid #33aa55; \
+                                                   font-family: inherit; font-size: 14px; \
+                                                   padding: 12px; box-sizing: border-box; resize: none; \
+                                                   outline: none;"
+                                            prop:value=move || md_edit_text.get()
+                                            on:input=move |ev| {
+                                                let value = event_target_value(&ev);
+                                                set_md_edit_text.set(value);
+                                            }
+                                        />
+                                    }.into_any()
+                                } else {
+                                    // View mode - get content from board
+                                    let b = board.get();
+                                    let content = b.nodes.iter()
+                                        .find(|n| n.id == nid)
+                                        .map(|n| n.text.clone())
+                                        .unwrap_or_default();
+                                    let html_content = parse_markdown(&content);
+                                    view! {
+                                        <div inner_html=html_content />
+                                    }.into_any()
+                                }
+                            }}
+                        </div>
+                    </div>
+                </div>
+            })
+        } else {
+            None
+        }
     };
 
     view! {
@@ -620,6 +1085,9 @@ pub fn App() -> impl IntoView {
                 on:keydown=on_keydown
             />
             {editing_node_view}
+            {md_overlays_view}
+            {modal_view}
+            {md_modal_view}
             <div style="position: fixed; bottom: 12px; left: 12px; color: #66cc88; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 11px; letter-spacing: 0.5px;">
                 "[DBLCLK] add/edit  [SHIFT+DRAG] connect  [CLK edge] select  [CMD+DRAG] box  [T] type  [DEL] delete"
             </div>

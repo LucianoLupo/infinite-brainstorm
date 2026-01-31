@@ -47,6 +47,15 @@ pub struct Edge {
     pub to_node: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct LinkPreview {
+    pub url: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub image: Option<String>,
+    pub site_name: Option<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Camera {
     pub x: f64,

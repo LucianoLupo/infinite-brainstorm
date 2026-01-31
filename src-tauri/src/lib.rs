@@ -1,4 +1,5 @@
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -33,6 +34,15 @@ pub struct Edge {
     pub id: String,
     pub from_node: String,
     pub to_node: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct LinkPreview {
+    pub url: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub image: Option<String>,
+    pub site_name: Option<String>,
 }
 
 fn get_board_path(app: &AppHandle) -> PathBuf {
@@ -77,6 +87,66 @@ fn save_board(app: AppHandle, board: Board) -> Result<(), String> {
 fn get_board_path_cmd(app: AppHandle) -> Result<String, String> {
     let path = get_board_path(&app);
     Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let html = response.text().await.map_err(|e| e.to_string())?;
+    let document = Html::parse_document(&html);
+
+    // Selectors for Open Graph and fallback meta tags
+    let og_title = Selector::parse(r#"meta[property="og:title"]"#).ok();
+    let og_desc = Selector::parse(r#"meta[property="og:description"]"#).ok();
+    let og_image = Selector::parse(r#"meta[property="og:image"]"#).ok();
+    let og_site = Selector::parse(r#"meta[property="og:site_name"]"#).ok();
+    let meta_desc = Selector::parse(r#"meta[name="description"]"#).ok();
+    let title_tag = Selector::parse("title").ok();
+    let twitter_image = Selector::parse(r#"meta[name="twitter:image"]"#).ok();
+
+    let get_content = |sel: Option<Selector>| -> Option<String> {
+        sel.and_then(|s| {
+            document
+                .select(&s)
+                .next()
+                .and_then(|el| el.value().attr("content").map(|s| s.to_string()))
+        })
+    };
+
+    let title = get_content(og_title).or_else(|| {
+        title_tag.and_then(|s| document.select(&s).next().map(|el| el.text().collect()))
+    });
+
+    let description = get_content(og_desc.clone()).or_else(|| get_content(meta_desc));
+
+    let mut image = get_content(og_image).or_else(|| get_content(twitter_image));
+
+    // Make relative image URLs absolute
+    if let Some(ref img) = image {
+        if img.starts_with('/') {
+            if let Ok(base) = reqwest::Url::parse(&url) {
+                if let Ok(absolute) = base.join(img) {
+                    image = Some(absolute.to_string());
+                }
+            }
+        }
+    }
+
+    let site_name = get_content(og_site);
+
+    Ok(LinkPreview {
+        url,
+        title,
+        description,
+        image,
+        site_name,
+    })
 }
 
 fn setup_file_watcher(app: AppHandle) {
@@ -137,7 +207,7 @@ pub fn run() {
             setup_file_watcher(app.handle().clone());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![load_board, save_board, get_board_path_cmd])
+        .invoke_handler(tauri::generate_handler![load_board, save_board, get_board_path_cmd, fetch_link_preview])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

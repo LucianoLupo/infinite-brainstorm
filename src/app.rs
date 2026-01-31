@@ -73,11 +73,27 @@ fn intersects_box(node: &Node, min_x: f64, min_y: f64, max_x: f64, max_y: f64) -
     !(node.x > max_x || node_right < min_x || node.y > max_y || node_bottom < min_y)
 }
 
+fn point_near_line(px: f64, py: f64, x1: f64, y1: f64, x2: f64, y2: f64, threshold: f64) -> bool {
+    let dx = x2 - x1;
+    let dy = y2 - y1;
+    let len_sq = dx * dx + dy * dy;
+    if len_sq == 0.0 {
+        return ((px - x1).powi(2) + (py - y1).powi(2)).sqrt() < threshold;
+    }
+    let t = ((px - x1) * dx + (py - y1) * dy) / len_sq;
+    let t = t.clamp(0.0, 1.0);
+    let closest_x = x1 + t * dx;
+    let closest_y = y1 + t * dy;
+    let dist = ((px - closest_x).powi(2) + (py - closest_y).powi(2)).sqrt();
+    dist < threshold
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let (board, set_board) = signal(Board::default());
     let (camera, set_camera) = signal(Camera::new());
     let (selected_nodes, set_selected_nodes) = signal::<HashSet<String>>(HashSet::new());
+    let (selected_edge, set_selected_edge) = signal::<Option<String>>(None);
     let (drag_state, set_drag_state) = signal(DragState::default());
     let (pan_state, set_pan_state) = signal(PanState::default());
     let (editing_node, set_editing_node) = signal::<Option<String>>(None);
@@ -114,6 +130,7 @@ pub fn App() -> impl IntoView {
         let current_board = board.get();
         let current_camera = camera.get();
         let current_selected = selected_nodes.get();
+        let current_selected_edge = selected_edge.get();
         let current_editing = editing_node.get();
         let current_edge_creation = edge_creation.get();
         let current_selection_box = selection_box.get();
@@ -139,6 +156,7 @@ pub fn App() -> impl IntoView {
                     &current_board,
                     &current_camera,
                     &current_selected,
+                    current_selected_edge.as_ref(),
                     current_editing.as_ref(),
                     current_edge_creation.is_creating.then(|| {
                         (
@@ -175,6 +193,7 @@ pub fn App() -> impl IntoView {
             .find(|n| n.contains_point(world_x, world_y));
 
         if let Some(node) = clicked_node {
+            set_selected_edge.set(None);
             if ev.shift_key() {
                 set_edge_creation.set(EdgeCreationState {
                     is_creating: true,
@@ -215,25 +234,45 @@ pub fn App() -> impl IntoView {
                 });
             }
         } else {
-            if !ev.shift_key() && !ev.meta_key() && !ev.ctrl_key() {
+            let clicked_edge = current_board.edges.iter().find(|edge| {
+                let from = current_board.nodes.iter().find(|n| n.id == edge.from_node);
+                let to = current_board.nodes.iter().find(|n| n.id == edge.to_node);
+                if let (Some(from), Some(to)) = (from, to) {
+                    let from_cx = from.x + from.width / 2.0;
+                    let from_cy = from.y + from.height / 2.0;
+                    let to_cx = to.x + to.width / 2.0;
+                    let to_cy = to.y + to.height / 2.0;
+                    point_near_line(world_x, world_y, from_cx, from_cy, to_cx, to_cy, 10.0 / cam.zoom)
+                } else {
+                    false
+                }
+            });
+
+            if let Some(edge) = clicked_edge {
                 set_selected_nodes.set(HashSet::new());
-            }
-            if ev.ctrl_key() || ev.meta_key() {
-                set_drag_state.set(DragState {
-                    is_dragging: false,
-                    is_box_selecting: true,
-                    start_x: canvas_x,
-                    start_y: canvas_y,
-                    node_start_positions: HashMap::new(),
-                });
+                set_selected_edge.set(Some(edge.id.clone()));
             } else {
-                set_pan_state.set(PanState {
-                    is_panning: true,
-                    start_x: canvas_x,
-                    start_y: canvas_y,
-                    camera_start_x: cam.x,
-                    camera_start_y: cam.y,
-                });
+                set_selected_edge.set(None);
+                if !ev.shift_key() && !ev.meta_key() && !ev.ctrl_key() {
+                    set_selected_nodes.set(HashSet::new());
+                }
+                if ev.ctrl_key() || ev.meta_key() {
+                    set_drag_state.set(DragState {
+                        is_dragging: false,
+                        is_box_selecting: true,
+                        start_x: canvas_x,
+                        start_y: canvas_y,
+                        node_start_positions: HashMap::new(),
+                    });
+                } else {
+                    set_pan_state.set(PanState {
+                        is_panning: true,
+                        start_x: canvas_x,
+                        start_y: canvas_y,
+                        camera_start_x: cam.x,
+                        camera_start_y: cam.y,
+                    });
+                }
             }
         }
     };
@@ -424,10 +463,22 @@ pub fn App() -> impl IntoView {
 
         let key = ev.key();
         let selected = selected_nodes.get_untracked();
+        let edge_sel = selected_edge.get_untracked();
 
         match key.as_str() {
             "Backspace" | "Delete" => {
-                if !selected.is_empty() {
+                if let Some(edge_id) = edge_sel {
+                    set_board.update(|b| {
+                        b.edges.retain(|e| e.id != edge_id);
+                    });
+                    set_selected_edge.set(None);
+
+                    let current_board = board.get_untracked();
+                    spawn_local(async move {
+                        let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: current_board }).unwrap();
+                        let _ = invoke("save_board", args).await;
+                    });
+                } else if !selected.is_empty() {
                     set_board.update(|b| {
                         b.nodes.retain(|n| !selected.contains(&n.id));
                         b.edges.retain(|e| !selected.contains(&e.from_node) && !selected.contains(&e.to_node));
@@ -460,6 +511,7 @@ pub fn App() -> impl IntoView {
             }
             "Escape" => {
                 set_selected_nodes.set(HashSet::new());
+                set_selected_edge.set(None);
                 set_editing_node.set(None);
                 set_edge_creation.set(EdgeCreationState::default());
                 set_selection_box.set(None);
@@ -538,9 +590,10 @@ pub fn App() -> impl IntoView {
                         autofocus=true
                         style=format!(
                             "position: absolute; left: {}px; top: {}px; width: {}px; height: {}px; \
-                             font-size: {}px; text-align: center; background: rgba(0,0,0,0.5); \
-                             color: white; border: 2px solid #00ff88; outline: none; border-radius: 8px; \
-                             box-sizing: border-box;",
+                             font-size: {}px; text-align: center; background: #020202; \
+                             color: #ccffdd; border: 1px solid #aaffbb; outline: none; \
+                             box-sizing: border-box; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
+                             text-shadow: 0 0 6px #aaffbb;",
                             screen_x, screen_y, screen_w, screen_h, font_size
                         )
                         on:blur=on_blur
@@ -553,11 +606,11 @@ pub fn App() -> impl IntoView {
     };
 
     view! {
-        <div style="width: 100vw; height: 100vh; overflow: hidden; background: #1a1a2e; position: relative;">
+        <div style="width: 100vw; height: 100vh; overflow: hidden; background: #020202; position: relative;">
             <canvas
                 node_ref=canvas_ref
                 tabindex="0"
-                style="width: 100%; height: 100%; display: block; cursor: grab; outline: none;"
+                style="width: 100%; height: 100%; display: block; cursor: crosshair; outline: none;"
                 on:mousedown=on_mouse_down
                 on:mousemove=on_mouse_move
                 on:mouseup=on_mouse_up
@@ -567,8 +620,8 @@ pub fn App() -> impl IntoView {
                 on:keydown=on_keydown
             />
             {editing_node_view}
-            <div style="position: fixed; bottom: 20px; left: 20px; color: #6a6a9a; font-family: sans-serif; font-size: 12px;">
-                "Dbl-click: add/edit | Shift+drag: connect | Ctrl/Cmd+drag: box select | T: cycle type | Del: delete | Esc: deselect"
+            <div style="position: fixed; bottom: 12px; left: 12px; color: #66cc88; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 11px; letter-spacing: 0.5px;">
+                "[DBLCLK] add/edit  [SHIFT+DRAG] connect  [CLK edge] select  [CMD+DRAG] box  [T] type  [DEL] delete"
             </div>
         </div>
     }

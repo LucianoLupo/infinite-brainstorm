@@ -4,12 +4,28 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
+const BG_COLOR: &str = "#020202";
+const GRID_COLOR: &str = "#0a1a0a";
+const BORDER_COLOR: &str = "#44dd66";
+const BORDER_SELECTED: &str = "#aaffbb";
+const TEXT_COLOR: &str = "#ccffdd";
+const TEXT_DIM: &str = "#66cc88";
+const NODE_BG_TEXT: &str = "#040804";
+const NODE_BG_IDEA: &str = "#041004";
+const NODE_BG_NOTE: &str = "#0a0a04";
+const EDGE_COLOR: &str = "#33aa55";
+const EDGE_PREVIEW: &str = "#aaffbb";
+const SELECT_BOX_FILL: &str = "rgba(100, 200, 130, 0.15)";
+const SELECT_BOX_STROKE: &str = "#aaffbb";
+const FONT: &str = "JetBrains Mono, Fira Code, Consolas, monospace";
+
 pub fn render_board(
     ctx: &CanvasRenderingContext2d,
     canvas: &HtmlCanvasElement,
     board: &Board,
     camera: &Camera,
     selected_nodes: &HashSet<String>,
+    selected_edge: Option<&String>,
     editing_node: Option<&String>,
     edge_preview: Option<(Option<&String>, f64, f64)>,
     selection_box: Option<(f64, f64, f64, f64)>,
@@ -17,13 +33,14 @@ pub fn render_board(
     let width = canvas.width() as f64;
     let height = canvas.height() as f64;
 
-    ctx.set_fill_style_str("#1a1a2e");
+    ctx.set_fill_style_str(BG_COLOR);
     ctx.fill_rect(0.0, 0.0, width, height);
 
     draw_grid(ctx, camera, width, height);
 
     for edge in &board.edges {
-        draw_edge(ctx, board, edge, camera);
+        let is_selected = selected_edge.map_or(false, |id| id == &edge.id);
+        draw_edge(ctx, board, edge, camera, is_selected);
     }
 
     if let Some((Some(from_node_id), to_screen_x, to_screen_y)) = edge_preview {
@@ -47,7 +64,7 @@ fn draw_grid(ctx: &CanvasRenderingContext2d, camera: &Camera, width: f64, height
         return;
     }
 
-    ctx.set_stroke_style_str("#2a2a4e");
+    ctx.set_stroke_style_str(GRID_COLOR);
     ctx.set_line_width(1.0);
 
     let offset_x = (camera.x * camera.zoom) % grid_size;
@@ -78,66 +95,54 @@ fn draw_node(ctx: &CanvasRenderingContext2d, node: &Node, camera: &Camera, is_se
     let screen_height = node.height * camera.zoom;
 
     let bg_color = match node.node_type.as_str() {
-        "idea" => "#4a4a8a",
-        "note" => "#8a4a4a",
-        _ => "#3a3a5a",
+        "idea" => NODE_BG_IDEA,
+        "note" => NODE_BG_NOTE,
+        _ => NODE_BG_TEXT,
     };
     ctx.set_fill_style_str(bg_color);
-
-    let radius = 8.0 * camera.zoom;
-    draw_rounded_rect(ctx, screen_x, screen_y, screen_width, screen_height, radius);
-    ctx.fill();
+    ctx.fill_rect(screen_x, screen_y, screen_width, screen_height);
 
     if is_selected {
-        ctx.set_stroke_style_str("#00ff88");
-        ctx.set_line_width(3.0);
-    } else {
-        ctx.set_stroke_style_str("#6a6a9a");
+        ctx.set_stroke_style_str(BORDER_SELECTED);
         ctx.set_line_width(1.0);
+        ctx.set_shadow_color(BORDER_SELECTED);
+        ctx.set_shadow_blur(8.0);
+    } else {
+        ctx.set_stroke_style_str(BORDER_COLOR);
+        ctx.set_line_width(1.0);
+        ctx.set_shadow_blur(0.0);
     }
-    draw_rounded_rect(ctx, screen_x, screen_y, screen_width, screen_height, radius);
-    ctx.stroke();
+    ctx.stroke_rect(screen_x, screen_y, screen_width, screen_height);
+    ctx.set_shadow_blur(0.0);
 
     if !is_editing {
-        ctx.set_fill_style_str("#ffffff");
-        let font_size = (14.0 * camera.zoom).max(8.0);
-        ctx.set_font(&format!("{}px sans-serif", font_size));
+        ctx.set_fill_style_str(if is_selected { TEXT_COLOR } else { TEXT_DIM });
+        let font_size = (12.0 * camera.zoom).max(8.0);
+        ctx.set_font(&format!("{}px {}", font_size, FONT));
         ctx.set_text_align("center");
         ctx.set_text_baseline("middle");
 
         let text_x = screen_x + screen_width / 2.0;
         let text_y = screen_y + screen_height / 2.0;
 
-        let max_width = screen_width - 20.0 * camera.zoom;
+        let max_width = screen_width - 16.0 * camera.zoom;
         let _ = ctx.fill_text_with_max_width(&node.text, text_x, text_y, max_width);
     }
+
+    let type_indicator = match node.node_type.as_str() {
+        "idea" => "[IDEA]",
+        "note" => "[NOTE]",
+        _ => "[TEXT]",
+    };
+    ctx.set_fill_style_str(TEXT_DIM);
+    let small_font = (9.0 * camera.zoom).max(6.0);
+    ctx.set_font(&format!("{}px {}", small_font, FONT));
+    ctx.set_text_align("left");
+    ctx.set_text_baseline("top");
+    let _ = ctx.fill_text(type_indicator, screen_x + 4.0 * camera.zoom, screen_y + 4.0 * camera.zoom);
 }
 
-fn draw_rounded_rect(
-    ctx: &CanvasRenderingContext2d,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    radius: f64,
-) {
-    ctx.begin_path();
-    ctx.move_to(x + radius, y);
-    ctx.line_to(x + width - radius, y);
-    ctx.arc_to(x + width, y, x + width, y + radius, radius)
-        .unwrap();
-    ctx.line_to(x + width, y + height - radius);
-    ctx.arc_to(x + width, y + height, x + width - radius, y + height, radius)
-        .unwrap();
-    ctx.line_to(x + radius, y + height);
-    ctx.arc_to(x, y + height, x, y + height - radius, radius)
-        .unwrap();
-    ctx.line_to(x, y + radius);
-    ctx.arc_to(x, y, x + radius, y, radius).unwrap();
-    ctx.close_path();
-}
-
-fn draw_edge(ctx: &CanvasRenderingContext2d, board: &Board, edge: &crate::state::Edge, camera: &Camera) {
+fn draw_edge(ctx: &CanvasRenderingContext2d, board: &Board, edge: &crate::state::Edge, camera: &Camera, is_selected: bool) {
     let from_node = board.nodes.iter().find(|n| n.id == edge.from_node);
     let to_node = board.nodes.iter().find(|n| n.id == edge.to_node);
 
@@ -150,12 +155,20 @@ fn draw_edge(ctx: &CanvasRenderingContext2d, board: &Board, edge: &crate::state:
         let (from_screen_x, from_screen_y) = camera.world_to_screen(from_center_x, from_center_y);
         let (to_screen_x, to_screen_y) = camera.world_to_screen(to_center_x, to_center_y);
 
-        ctx.set_stroke_style_str("#6a6a9a");
-        ctx.set_line_width(2.0);
+        if is_selected {
+            ctx.set_stroke_style_str(BORDER_SELECTED);
+            ctx.set_line_width(2.0);
+            ctx.set_shadow_color(BORDER_SELECTED);
+            ctx.set_shadow_blur(8.0);
+        } else {
+            ctx.set_stroke_style_str(EDGE_COLOR);
+            ctx.set_line_width(1.0);
+        }
         ctx.begin_path();
         ctx.move_to(from_screen_x, from_screen_y);
         ctx.line_to(to_screen_x, to_screen_y);
         ctx.stroke();
+        ctx.set_shadow_blur(0.0);
     }
 }
 
@@ -172,14 +185,12 @@ fn draw_edge_preview(
         let from_center_y = from.y + from.height / 2.0;
         let (from_screen_x, from_screen_y) = camera.world_to_screen(from_center_x, from_center_y);
 
-        ctx.set_stroke_style_str("#00ff88");
-        ctx.set_line_width(2.0);
-        ctx.set_line_dash(&js_sys::Array::of2(&JsValue::from(5.0), &JsValue::from(5.0))).unwrap();
+        ctx.set_stroke_style_str(EDGE_PREVIEW);
+        ctx.set_line_width(1.0);
         ctx.begin_path();
         ctx.move_to(from_screen_x, from_screen_y);
         ctx.line_to(to_screen_x, to_screen_y);
         ctx.stroke();
-        ctx.set_line_dash(&js_sys::Array::new()).unwrap();
     }
 }
 
@@ -196,14 +207,12 @@ fn draw_selection_box(
     let width = screen_max_x - screen_min_x;
     let height = screen_max_y - screen_min_y;
 
-    ctx.set_fill_style_str("rgba(0, 100, 255, 0.15)");
+    ctx.set_fill_style_str(SELECT_BOX_FILL);
     ctx.fill_rect(screen_min_x, screen_min_y, width, height);
 
-    ctx.set_stroke_style_str("rgba(0, 150, 255, 0.8)");
+    ctx.set_stroke_style_str(SELECT_BOX_STROKE);
     ctx.set_line_width(1.0);
-    ctx.set_line_dash(&js_sys::Array::of2(&JsValue::from(4.0), &JsValue::from(4.0))).unwrap();
     ctx.stroke_rect(screen_min_x, screen_min_y, width, height);
-    ctx.set_line_dash(&js_sys::Array::new()).unwrap();
 }
 
 pub fn get_canvas_context(

@@ -1,6 +1,72 @@
 # Infinite Brainstorm
 
-An infinite canvas brainstorming app built with Tauri v2 + Leptos (Rust WASM). Designed for AI-assisted collaboration where Claude Code can directly edit the canvas state via JSON.
+An **agent-native** infinite canvas brainstorming app. The core design principle: **anything a human can do, Claude Code can do faster by editing `board.json` directly**.
+
+Built with Tauri v2 + Leptos (Rust WASM). File watching enables real-time sync between the UI and Claude Code edits.
+
+## Agent-Native Design Philosophy
+
+This app is optimized for AI collaboration:
+
+1. **JSON is the API** - No complex IPC or REST endpoints. Claude Code reads/writes `board.json` directly.
+2. **File watching = instant sync** - Edit the file, the canvas updates in <100ms.
+3. **Simple schema** - Nodes have `id`, `x`, `y`, `width`, `height`, `text`, `node_type`. Edges connect nodes by ID.
+4. **Predictable layouts** - Grid is 50px. Nodes default to 200x100. Easy to calculate positions programmatically.
+
+**When to use the UI vs Claude Code:**
+- UI: Exploring, panning, zooming, quick manual edits
+- Claude Code: Bulk operations, generating content, reorganizing, connecting ideas
+
+## Quick Reference for Claude Code
+
+**File location:**
+```
+~/Library/Application Support/com.lucianolupo.infinite-brainstorm/board.json
+```
+
+**Minimal node:**
+```json
+{"id": "uuid", "x": 0, "y": 0, "width": 200, "height": 100, "text": "Hello", "node_type": "text"}
+```
+
+**Node types:** `"text"` (gray), `"idea"` (purple), `"note"` (red)
+
+**Edge:** `{"id": "uuid", "from_node": "node-id-1", "to_node": "node-id-2"}`
+
+## Common Claude Code Operations
+
+### Read the current board state
+```bash
+cat ~/Library/Application\ Support/com.lucianolupo.infinite-brainstorm/board.json
+```
+
+### Add multiple nodes at once
+Read the file, parse JSON, append nodes with calculated positions, write back. Use grid math:
+- Column layout: `x = col * 250` (200 width + 50 gap)
+- Row layout: `y = row * 150` (100 height + 50 gap)
+
+### Create a mind map from a topic
+1. Create central node at (0, 0)
+2. Generate related ideas
+3. Position children in a radial or tree layout
+4. Connect with edges
+
+### Reorganize/cluster nodes
+1. Read all nodes
+2. Group by `node_type` or semantic similarity
+3. Recalculate positions for each cluster
+4. Write back
+
+### Bulk rename or transform
+1. Read board
+2. Map over nodes, transform text
+3. Write back
+
+### Connect related ideas
+1. Read board
+2. Analyze node texts for relationships
+3. Add edges array entries
+4. Write back
 
 ## Architecture
 
@@ -22,7 +88,7 @@ An infinite canvas brainstorming app built with Tauri v2 + Leptos (Rust WASM). D
 ┌──────────────────────────────┴──────────────────────────────────────┐
 │                          Data Layer                                 │
 │  ~/Library/Application Support/com.lucianolupo.infinite-brainstorm/ │
-│  └── board.json  ← Claude Code can edit this directly               │
+│  └── board.json  ← Claude Code edits this directly                  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -94,7 +160,7 @@ infinite-brainstorm/
       "width": 200.0,
       "height": 100.0,
       "text": "Node content",
-      "node_type": "text"  // "text" | "idea" | "note"
+      "node_type": "text"
     }
   ],
   "edges": [
@@ -111,8 +177,6 @@ infinite-brainstorm/
 - `"idea"` → Purple background (`#4a4a8a`)
 - `"note"` → Red background (`#8a4a4a`)
 - `"text"` → Gray background (`#3a3a5a`) - default
-
-**File location:** `~/Library/Application Support/com.lucianolupo.infinite-brainstorm/board.json`
 
 ## Conventions
 
@@ -140,63 +204,37 @@ infinite-brainstorm/
 | Action | Behavior |
 |--------|----------|
 | Click node | Select node (green border) |
-| Drag node | Move node, saves on release |
+| Click edge | Select edge (glowing line) |
+| Ctrl/Cmd+click | Toggle node in multi-selection |
+| Drag node | Move all selected nodes, saves on release |
 | Drag canvas | Pan the view |
+| Ctrl/Cmd+drag canvas | Box select nodes |
 | Scroll wheel | Zoom (centered on cursor) |
-| Double-click | Create new node at cursor |
+| Double-click empty | Create new node, enter edit mode |
+| Double-click node | Edit node text inline |
+| Shift+drag from node | Create edge to target node |
+| T | Cycle type on selected nodes |
+| Delete/Backspace | Delete selected nodes or edge |
+| Escape | Clear selection, cancel editing |
 
-## Common Tasks
+## Future Ideas
 
-### Add a node via Claude Code
+**Implemented:**
+- ✅ Text editing (double-click to edit inline)
+- ✅ Edge creation (shift+drag)
+- ✅ Multi-select (ctrl+click, box select)
+- ✅ Edge deletion (click edge to select, delete key)
 
-Edit `~/Library/Application Support/com.lucianolupo.infinite-brainstorm/board.json`:
+**Not Yet Implemented:**
+- **Undo/redo** - History stack for Ctrl+Z/Y
+- **Multi-board** - Multiple board files, board switcher
+- **CRDT (Loro)** - Real-time collaboration
 
-```json
-{
-  "nodes": [
-    // ... existing nodes ...
-    {
-      "id": "my-new-node",
-      "x": 500.0,
-      "y": 300.0,
-      "width": 180.0,
-      "height": 80.0,
-      "text": "Added by Claude",
-      "node_type": "idea"
-    }
-  ],
-  "edges": []
-}
-```
-
-The app will detect the change and re-render immediately.
-
-### Add an edge (connection)
-
-Add to the `edges` array with valid node IDs:
-
-```json
-{
-  "id": "edge-1",
-  "from_node": "source-node-id",
-  "to_node": "target-node-id"
-}
-```
-
-### Run in release mode
-
-```bash
-cargo tauri build
-```
-
-Output in `target/release/bundle/`.
-
-## Future Ideas (Not Implemented)
-
-- **CRDT (Loro)**: Real-time collaboration between multiple users
-- **Text editing**: In-node text editing instead of fixed strings
-- **Multi-board**: Multiple board files, board switching
-- **Undo/redo**: History stack for actions
+**Agent-Native Feature Ideas:**
+- **Semantic zoom** - Show node summaries when zoomed out
+- **Auto-layout commands** - Claude Code can trigger layout algorithms
+- **Board templates** - Predefined structures (mind map, kanban, flowchart)
+- **Node metadata** - Additional fields Claude Code can use for categorization
 
 ## Troubleshooting
 

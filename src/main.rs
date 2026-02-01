@@ -1,8 +1,4 @@
-mod app;
-mod canvas;
-mod state;
-
-use app::*;
+use infinite_brainstorm_ui::app::*;
 use leptos::prelude::*;
 
 fn main() {

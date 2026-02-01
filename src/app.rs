@@ -53,13 +53,11 @@ async fn save_board_storage(board: &Board) {
         SKIP_NEXT_RELOAD.with(|flag| flag.set(true));
         let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: board.clone() }).unwrap();
         let _ = invoke("save_board", args).await;
-    } else {
-        if let Ok(json) = serde_json::to_string(board) {
-            if let Some(storage) = web_sys::window()
-                .and_then(|w| w.local_storage().ok().flatten())
-            {
-                let _ = storage.set_item(LOCALSTORAGE_KEY, &json);
-            }
+    } else if let Ok(json) = serde_json::to_string(board) {
+        if let Some(storage) = web_sys::window()
+            .and_then(|w| w.local_storage().ok().flatten())
+        {
+            let _ = storage.set_item(LOCALSTORAGE_KEY, &json);
         }
     }
 }
@@ -389,7 +387,7 @@ pub fn App() -> impl IntoView {
                     &current_selected,
                     current_selected_edge.as_ref(),
                     current_editing.as_ref(),
-                    current_edge_creation.is_creating.then(|| {
+                    current_edge_creation.is_creating.then_some({
                         (
                             current_edge_creation.from_node_id.as_ref(),
                             current_edge_creation.current_x,
@@ -812,27 +810,24 @@ pub fn App() -> impl IntoView {
 
                     let node_id_for_keydown = node_id.clone();
                     let on_keydown_textarea = move |ev: web_sys::KeyboardEvent| {
-                        match ev.key().as_str() {
-                            "Escape" => {
-                                if let Some(target) = ev.target() {
-                                    if let Ok(textarea) = target.dyn_into::<web_sys::HtmlTextAreaElement>() {
-                                        let new_text = textarea.value();
-                                        let node_id_clone = node_id_for_keydown.clone();
-                                        set_board.update(|b| {
-                                            if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
-                                                node.text = new_text;
-                                            }
-                                        });
+                        if ev.key().as_str() == "Escape" {
+                            if let Some(target) = ev.target() {
+                                if let Ok(textarea) = target.dyn_into::<web_sys::HtmlTextAreaElement>() {
+                                    let new_text = textarea.value();
+                                    let node_id_clone = node_id_for_keydown.clone();
+                                    set_board.update(|b| {
+                                        if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
+                                            node.text = new_text;
+                                        }
+                                    });
 
-                                        let current_board = board.get_untracked();
-                                        spawn_local(async move {
-                                            save_board_storage(&current_board).await;
-                                        });
-                                    }
+                                    let current_board = board.get_untracked();
+                                    spawn_local(async move {
+                                        save_board_storage(&current_board).await;
+                                    });
                                 }
-                                set_editing_node.set(None);
                             }
-                            _ => {}
+                            set_editing_node.set(None);
                         }
                     };
 
@@ -968,8 +963,7 @@ pub fn App() -> impl IntoView {
     };
 
     let modal_view = move || {
-        if let Some(image_url) = modal_image.get() {
-            Some(view! {
+        modal_image.get().map(|image_url| view! {
                 <div
                     style="position: fixed; inset: 0; background: rgba(0,0,0,0.9); \
                            display: flex; align-items: center; justify-content: center; \
@@ -983,9 +977,6 @@ pub fn App() -> impl IntoView {
                     />
                 </div>
             })
-        } else {
-            None
-        }
     };
 
     let md_modal_view = move || {

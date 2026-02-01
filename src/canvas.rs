@@ -49,7 +49,7 @@ pub fn render_board(
     draw_grid(ctx, camera, width, height);
 
     for edge in &board.edges {
-        let is_selected = selected_edge.map_or(false, |id| id == &edge.id);
+        let is_selected = selected_edge == Some(&edge.id);
         draw_edge(ctx, board, edge, camera, is_selected);
     }
 
@@ -59,7 +59,7 @@ pub fn render_board(
 
     for node in &board.nodes {
         let is_selected = selected_nodes.contains(&node.id);
-        let is_editing = editing_node.map_or(false, |id| id == &node.id);
+        let is_editing = editing_node == Some(&node.id);
         draw_node(ctx, node, camera, is_selected, is_editing, image_cache, link_preview_cache);
     }
 

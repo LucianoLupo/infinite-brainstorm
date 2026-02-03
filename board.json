@@ -200,10 +200,10 @@
     },
     {
       "id": "future-md-links",
-      "x": 391.47170415031184,
-      "y": 444.8458151447539,
-      "width": 220.0,
-      "height": 100.0,
+      "x": 280.47170415031184,
+      "y": 417.8458151447539,
+      "width": 273.0,
+      "height": 145.0,
       "text": "Local .md links → render as mdfile:// links to Obsidian vaultshould display as markdown nodes",
       "node_type": "note"
     },
@@ -407,10 +407,10 @@
     },
     {
       "id": "research-validated",
-      "x": 760.0,
-      "y": -100.0,
-      "width": 220.0,
-      "height": 100.0,
+      "x": 760.8659200716975,
+      "y": -89.5717964869493,
+      "width": 260.05529921416905,
+      "height": 123.10882646971277,
       "text": "Core Thesis Validated ✓\nAI edits JSON → App reacts\nCollaboration surface works!",
       "node_type": "idea"
     },

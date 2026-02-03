@@ -1,5 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+pub const RESIZE_HANDLE_SIZE: f64 = 8.0;
+pub const MIN_NODE_WIDTH: f64 = 50.0;
+pub const MIN_NODE_HEIGHT: f64 = 30.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ResizeHandle {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Board {
     pub nodes: Vec<Node>,
@@ -37,6 +49,40 @@ impl Node {
 
     pub fn contains_point(&self, px: f64, py: f64) -> bool {
         px >= self.x && px <= self.x + self.width && py >= self.y && py <= self.y + self.height
+    }
+
+    pub fn resize_handle_at(&self, px: f64, py: f64, handle_size: f64) -> Option<ResizeHandle> {
+        let half = handle_size / 2.0;
+
+        // Top-left corner
+        let tl_x = self.x;
+        let tl_y = self.y;
+        if px >= tl_x - half && px <= tl_x + half && py >= tl_y - half && py <= tl_y + half {
+            return Some(ResizeHandle::TopLeft);
+        }
+
+        // Top-right corner
+        let tr_x = self.x + self.width;
+        let tr_y = self.y;
+        if px >= tr_x - half && px <= tr_x + half && py >= tr_y - half && py <= tr_y + half {
+            return Some(ResizeHandle::TopRight);
+        }
+
+        // Bottom-left corner
+        let bl_x = self.x;
+        let bl_y = self.y + self.height;
+        if px >= bl_x - half && px <= bl_x + half && py >= bl_y - half && py <= bl_y + half {
+            return Some(ResizeHandle::BottomLeft);
+        }
+
+        // Bottom-right corner
+        let br_x = self.x + self.width;
+        let br_y = self.y + self.height;
+        if px >= br_x - half && px <= br_x + half && py >= br_y - half && py <= br_y + half {
+            return Some(ResizeHandle::BottomRight);
+        }
+
+        None
     }
 }
 
@@ -213,6 +259,59 @@ mod tests {
             assert!(!node.contains_point(150.0, 99.0));
             // Below node
             assert!(!node.contains_point(150.0, 201.0));
+        }
+
+        #[test]
+        fn resize_handle_at_top_left() {
+            let node = Node::new("n".to_string(), 100.0, 100.0, "".to_string());
+            let handle_size = 8.0;
+            // Exactly at corner
+            assert_eq!(node.resize_handle_at(100.0, 100.0, handle_size), Some(ResizeHandle::TopLeft));
+            // Within handle range
+            assert_eq!(node.resize_handle_at(98.0, 98.0, handle_size), Some(ResizeHandle::TopLeft));
+            assert_eq!(node.resize_handle_at(103.0, 103.0, handle_size), Some(ResizeHandle::TopLeft));
+            // Outside handle range
+            assert_eq!(node.resize_handle_at(110.0, 100.0, handle_size), None);
+        }
+
+        #[test]
+        fn resize_handle_at_top_right() {
+            let node = Node::new("n".to_string(), 100.0, 100.0, "".to_string());
+            let handle_size = 8.0;
+            // Exactly at corner (100 + 200 = 300)
+            assert_eq!(node.resize_handle_at(300.0, 100.0, handle_size), Some(ResizeHandle::TopRight));
+            // Within handle range
+            assert_eq!(node.resize_handle_at(298.0, 98.0, handle_size), Some(ResizeHandle::TopRight));
+        }
+
+        #[test]
+        fn resize_handle_at_bottom_left() {
+            let node = Node::new("n".to_string(), 100.0, 100.0, "".to_string());
+            let handle_size = 8.0;
+            // Exactly at corner (100 + 100 = 200)
+            assert_eq!(node.resize_handle_at(100.0, 200.0, handle_size), Some(ResizeHandle::BottomLeft));
+            // Within handle range
+            assert_eq!(node.resize_handle_at(102.0, 202.0, handle_size), Some(ResizeHandle::BottomLeft));
+        }
+
+        #[test]
+        fn resize_handle_at_bottom_right() {
+            let node = Node::new("n".to_string(), 100.0, 100.0, "".to_string());
+            let handle_size = 8.0;
+            // Exactly at corner
+            assert_eq!(node.resize_handle_at(300.0, 200.0, handle_size), Some(ResizeHandle::BottomRight));
+            // Within handle range
+            assert_eq!(node.resize_handle_at(301.0, 201.0, handle_size), Some(ResizeHandle::BottomRight));
+        }
+
+        #[test]
+        fn resize_handle_at_center_returns_none() {
+            let node = Node::new("n".to_string(), 100.0, 100.0, "".to_string());
+            let handle_size = 8.0;
+            // Center of node
+            assert_eq!(node.resize_handle_at(200.0, 150.0, handle_size), None);
+            // Edge but not corner
+            assert_eq!(node.resize_handle_at(200.0, 100.0, handle_size), None);
         }
     }
 

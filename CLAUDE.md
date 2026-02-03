@@ -277,6 +277,7 @@ infinite-brainstorm/
 | Click edge | Select edge (glowing line) |
 | Ctrl/Cmd+click | Toggle node in multi-selection |
 | Drag node | Move all selected nodes, saves on release |
+| Drag corner handle | Resize selected node (min 50x30) |
 | Drag canvas | Pan the view |
 | Ctrl/Cmd+drag canvas | Box select nodes |
 | Scroll wheel | Zoom (centered on cursor) |
@@ -303,6 +304,7 @@ infinite-brainstorm/
 - ✅ Directory-based projects (board.json per folder)
 - ✅ CLI launcher (`brainstorm` command)
 - ✅ Dual storage (Tauri filesystem + browser localStorage)
+- ✅ Node resizing (drag corner handles, min 50x30)
 
 **Not Yet Implemented:**
 - **Undo/redo** - History stack for Ctrl+Z/Y

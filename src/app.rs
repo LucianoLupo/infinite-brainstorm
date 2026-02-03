@@ -1,5 +1,5 @@
 use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache};
-use crate::state::{Board, Camera, Edge, LinkPreview, Node};
+use crate::state::{Board, Camera, Edge, LinkPreview, Node, ResizeHandle, RESIZE_HANDLE_SIZE, MIN_NODE_WIDTH, MIN_NODE_HEIGHT};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use pulldown_cmark::{html, Parser};
@@ -110,6 +110,19 @@ struct EdgeCreationState {
     current_y: f64,
 }
 
+#[derive(Clone, Default)]
+struct ResizeState {
+    is_resizing: bool,
+    node_id: Option<String>,
+    handle: Option<ResizeHandle>,
+    start_mouse_x: f64,
+    start_mouse_y: f64,
+    original_x: f64,
+    original_y: f64,
+    original_width: f64,
+    original_height: f64,
+}
+
 fn cycle_node_type(current: &str) -> String {
     match current {
         "text" => "idea".to_string(),
@@ -167,6 +180,8 @@ pub fn App() -> impl IntoView {
     let (pan_state, set_pan_state) = signal(PanState::default());
     let (editing_node, set_editing_node) = signal::<Option<String>>(None);
     let (edge_creation, set_edge_creation) = signal(EdgeCreationState::default());
+    let (resize_state, set_resize_state) = signal(ResizeState::default());
+    let (cursor_style, set_cursor_style) = signal("crosshair".to_string());
     let (selection_box, set_selection_box) = signal::<Option<(f64, f64, f64, f64)>>(None);
     let (modal_image, set_modal_image) = signal::<Option<String>>(None);
     let (modal_md, set_modal_md) = signal::<Option<(String, bool)>>(None); // (node_id, is_editing)
@@ -434,46 +449,70 @@ pub fn App() -> impl IntoView {
                 });
             } else {
                 let current_selected = selected_nodes.get_untracked();
-                if ev.meta_key() || ev.ctrl_key() {
-                    set_selected_nodes.update(|s| {
-                        if !s.remove(&node.id) {
-                            s.insert(node.id.clone());
-                        }
-                    });
-                } else if !current_selected.contains(&node.id) {
-                    set_selected_nodes.set([node.id.clone()].into_iter().collect());
-                }
 
-                // Copy link URL to clipboard when clicking a link node
-                if node.node_type == "link" && !node.text.is_empty() {
-                    let url = node.text.clone();
-                    spawn_local(async move {
-                        if let Some(window) = web_sys::window() {
-                            let clipboard = window.navigator().clipboard();
-                            let _ = wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&url)).await;
-                        }
-                    });
-                }
+                // Check for resize handle on selected nodes
+                let handle_size = RESIZE_HANDLE_SIZE / cam.zoom;
+                let resize_handle = if current_selected.contains(&node.id) {
+                    node.resize_handle_at(world_x, world_y, handle_size)
+                } else {
+                    None
+                };
 
-                let selected = selected_nodes.get_untracked();
-                let mut start_positions = HashMap::new();
-                for n in &current_board.nodes {
-                    if selected.contains(&n.id) {
-                        start_positions.insert(n.id.clone(), (n.x, n.y));
+                if let Some(handle) = resize_handle {
+                    // Start resize operation
+                    set_resize_state.set(ResizeState {
+                        is_resizing: true,
+                        node_id: Some(node.id.clone()),
+                        handle: Some(handle),
+                        start_mouse_x: world_x,
+                        start_mouse_y: world_y,
+                        original_x: node.x,
+                        original_y: node.y,
+                        original_width: node.width,
+                        original_height: node.height,
+                    });
+                } else {
+                    if ev.meta_key() || ev.ctrl_key() {
+                        set_selected_nodes.update(|s| {
+                            if !s.remove(&node.id) {
+                                s.insert(node.id.clone());
+                            }
+                        });
+                    } else if !current_selected.contains(&node.id) {
+                        set_selected_nodes.set([node.id.clone()].into_iter().collect());
                     }
-                }
-                if start_positions.is_empty() {
-                    start_positions.insert(node.id.clone(), (node.x, node.y));
-                    set_selected_nodes.set([node.id.clone()].into_iter().collect());
-                }
 
-                set_drag_state.set(DragState {
-                    is_dragging: true,
-                    is_box_selecting: false,
-                    start_x: canvas_x,
-                    start_y: canvas_y,
-                    node_start_positions: start_positions,
-                });
+                    // Copy link URL to clipboard when clicking a link node
+                    if node.node_type == "link" && !node.text.is_empty() {
+                        let url = node.text.clone();
+                        spawn_local(async move {
+                            if let Some(window) = web_sys::window() {
+                                let clipboard = window.navigator().clipboard();
+                                let _ = wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&url)).await;
+                            }
+                        });
+                    }
+
+                    let selected = selected_nodes.get_untracked();
+                    let mut start_positions = HashMap::new();
+                    for n in &current_board.nodes {
+                        if selected.contains(&n.id) {
+                            start_positions.insert(n.id.clone(), (n.x, n.y));
+                        }
+                    }
+                    if start_positions.is_empty() {
+                        start_positions.insert(node.id.clone(), (node.x, node.y));
+                        set_selected_nodes.set([node.id.clone()].into_iter().collect());
+                    }
+
+                    set_drag_state.set(DragState {
+                        is_dragging: true,
+                        is_box_selecting: false,
+                        start_x: canvas_x,
+                        start_y: canvas_y,
+                        node_start_positions: start_positions,
+                    });
+                }
             }
         } else {
             let clicked_edge = current_board.edges.iter().find(|edge| {
@@ -528,8 +567,56 @@ pub fn App() -> impl IntoView {
         let current_drag = drag_state.get_untracked();
         let current_pan = pan_state.get_untracked();
         let edge_state = edge_creation.get_untracked();
+        let current_resize = resize_state.get_untracked();
 
-        if edge_state.is_creating {
+        if current_resize.is_resizing {
+            let cam = camera.get_untracked();
+            let (world_x, world_y) = cam.screen_to_world(canvas_x, canvas_y);
+            let dx = world_x - current_resize.start_mouse_x;
+            let dy = world_y - current_resize.start_mouse_y;
+
+            set_board.update(|b| {
+                if let Some(node_id) = &current_resize.node_id {
+                    if let Some(node) = b.nodes.iter_mut().find(|n| &n.id == node_id) {
+                        match current_resize.handle {
+                            Some(ResizeHandle::TopLeft) => {
+                                let new_width = (current_resize.original_width - dx).max(MIN_NODE_WIDTH);
+                                let new_height = (current_resize.original_height - dy).max(MIN_NODE_HEIGHT);
+                                let actual_dx = current_resize.original_width - new_width;
+                                let actual_dy = current_resize.original_height - new_height;
+                                node.x = current_resize.original_x + actual_dx;
+                                node.y = current_resize.original_y + actual_dy;
+                                node.width = new_width;
+                                node.height = new_height;
+                            }
+                            Some(ResizeHandle::TopRight) => {
+                                let new_width = (current_resize.original_width + dx).max(MIN_NODE_WIDTH);
+                                let new_height = (current_resize.original_height - dy).max(MIN_NODE_HEIGHT);
+                                let actual_dy = current_resize.original_height - new_height;
+                                node.y = current_resize.original_y + actual_dy;
+                                node.width = new_width;
+                                node.height = new_height;
+                            }
+                            Some(ResizeHandle::BottomLeft) => {
+                                let new_width = (current_resize.original_width - dx).max(MIN_NODE_WIDTH);
+                                let new_height = (current_resize.original_height + dy).max(MIN_NODE_HEIGHT);
+                                let actual_dx = current_resize.original_width - new_width;
+                                node.x = current_resize.original_x + actual_dx;
+                                node.width = new_width;
+                                node.height = new_height;
+                            }
+                            Some(ResizeHandle::BottomRight) => {
+                                let new_width = (current_resize.original_width + dx).max(MIN_NODE_WIDTH);
+                                let new_height = (current_resize.original_height + dy).max(MIN_NODE_HEIGHT);
+                                node.width = new_width;
+                                node.height = new_height;
+                            }
+                            None => {}
+                        }
+                    }
+                }
+            });
+        } else if edge_state.is_creating {
             set_edge_creation.update(|s| {
                 s.current_x = canvas_x;
                 s.current_y = canvas_y;
@@ -566,13 +653,52 @@ pub fn App() -> impl IntoView {
                 c.x = current_pan.camera_start_x - dx;
                 c.y = current_pan.camera_start_y - dy;
             });
+        } else {
+            // Update cursor based on what we're hovering over
+            let cam = camera.get_untracked();
+            let (world_x, world_y) = cam.screen_to_world(canvas_x, canvas_y);
+            let current_selected = selected_nodes.get_untracked();
+            let current_board = board.get_untracked();
+            let handle_size = RESIZE_HANDLE_SIZE / cam.zoom;
+
+            let mut new_cursor = "crosshair";
+
+            // Check if over a resize handle on a selected node
+            for node in current_board.nodes.iter().rev() {
+                if current_selected.contains(&node.id) {
+                    if let Some(handle) = node.resize_handle_at(world_x, world_y, handle_size) {
+                        new_cursor = match handle {
+                            ResizeHandle::TopLeft | ResizeHandle::BottomRight => "nwse-resize",
+                            ResizeHandle::TopRight | ResizeHandle::BottomLeft => "nesw-resize",
+                        };
+                        break;
+                    }
+                }
+                if node.contains_point(world_x, world_y) {
+                    new_cursor = "move";
+                    break;
+                }
+            }
+
+            set_cursor_style.set(new_cursor.to_string());
         }
     };
 
     let on_mouse_up = move |ev: web_sys::MouseEvent| {
         let was_dragging = drag_state.get_untracked().is_dragging;
+        let was_resizing = resize_state.get_untracked().is_resizing;
         let current_drag = drag_state.get_untracked();
         let edge_state = edge_creation.get_untracked();
+
+        if was_resizing {
+            set_resize_state.set(ResizeState::default());
+
+            let current_board = board.get_untracked();
+            spawn_local(async move {
+                save_board_storage(&current_board).await;
+            });
+            return;
+        }
 
         if edge_state.is_creating {
             if let Some(from_id) = &edge_state.from_node_id {
@@ -1117,7 +1243,7 @@ pub fn App() -> impl IntoView {
             <canvas
                 node_ref=canvas_ref
                 tabindex="0"
-                style="width: 100%; height: 100%; display: block; cursor: crosshair; outline: none;"
+                style=move || format!("width: 100%; height: 100%; display: block; cursor: {}; outline: none;", cursor_style.get())
                 on:mousedown=on_mouse_down
                 on:mousemove=on_mouse_move
                 on:mouseup=on_mouse_up
@@ -1131,7 +1257,7 @@ pub fn App() -> impl IntoView {
             {modal_view}
             {md_modal_view}
             <div style="position: fixed; bottom: 12px; left: 12px; color: #66cc88; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 11px; letter-spacing: 0.5px;">
-                "[DBLCLK] add/edit  [SHIFT+DRAG] connect  [CLK edge] select  [CMD+DRAG] box  [T] type  [DEL] delete"
+                "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [T] type  [DEL] delete"
             </div>
         </div>
     }

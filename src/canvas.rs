@@ -1,4 +1,4 @@
-use crate::state::{Board, Camera, LinkPreview, Node};
+use crate::state::{Board, Camera, LinkPreview, Node, RESIZE_HANDLE_SIZE};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -22,6 +22,8 @@ const EDGE_COLOR: &str = "#33aa55";
 const EDGE_PREVIEW: &str = "#aaffbb";
 const SELECT_BOX_FILL: &str = "rgba(100, 200, 130, 0.15)";
 const SELECT_BOX_STROKE: &str = "#aaffbb";
+const RESIZE_HANDLE_COLOR: &str = "#aaffbb";
+const RESIZE_HANDLE_BG: &str = "#020202";
 const FONT: &str = "JetBrains Mono, Fira Code, Consolas, monospace";
 
 pub type ImageCache = Rc<RefCell<HashMap<String, Option<HtmlImageElement>>>>;
@@ -179,6 +181,10 @@ fn draw_node(
     ctx.set_text_align("left");
     ctx.set_text_baseline("top");
     let _ = ctx.fill_text(type_indicator, screen_x + 4.0 * camera.zoom, screen_y + 4.0 * camera.zoom);
+
+    if is_selected {
+        draw_resize_handles(ctx, screen_x, screen_y, screen_width, screen_height, camera.zoom);
+    }
 }
 
 fn draw_image_content(
@@ -417,6 +423,38 @@ fn draw_selection_box(
     ctx.set_stroke_style_str(SELECT_BOX_STROKE);
     ctx.set_line_width(1.0);
     ctx.stroke_rect(screen_min_x, screen_min_y, width, height);
+}
+
+fn draw_resize_handles(
+    ctx: &CanvasRenderingContext2d,
+    screen_x: f64,
+    screen_y: f64,
+    screen_width: f64,
+    screen_height: f64,
+    zoom: f64,
+) {
+    let handle_size = RESIZE_HANDLE_SIZE * zoom;
+    let half = handle_size / 2.0;
+
+    ctx.set_fill_style_str(RESIZE_HANDLE_BG);
+    ctx.set_stroke_style_str(RESIZE_HANDLE_COLOR);
+    ctx.set_line_width(1.0);
+
+    // Top-left
+    ctx.fill_rect(screen_x - half, screen_y - half, handle_size, handle_size);
+    ctx.stroke_rect(screen_x - half, screen_y - half, handle_size, handle_size);
+
+    // Top-right
+    ctx.fill_rect(screen_x + screen_width - half, screen_y - half, handle_size, handle_size);
+    ctx.stroke_rect(screen_x + screen_width - half, screen_y - half, handle_size, handle_size);
+
+    // Bottom-left
+    ctx.fill_rect(screen_x - half, screen_y + screen_height - half, handle_size, handle_size);
+    ctx.stroke_rect(screen_x - half, screen_y + screen_height - half, handle_size, handle_size);
+
+    // Bottom-right
+    ctx.fill_rect(screen_x + screen_width - half, screen_y + screen_height - half, handle_size, handle_size);
+    ctx.stroke_rect(screen_x + screen_width - half, screen_y + screen_height - half, handle_size, handle_size);
 }
 
 /// Wrap text into multiple lines that fit within max_width

@@ -17,8 +17,15 @@
     {
       "identifier": "fs:scope",
       "allow": [
-        "$APPDATA/**"
+        "$APPDATA/**",
+        "$HOME/**",
+        "/Users/**",
+        "/tmp/**",
+        "**"
       ]
-    }
+    },
+    "clipboard-manager:default",
+    "clipboard-manager:allow-read-image",
+    "clipboard-manager:allow-read-text"
   ]
 }

@@ -22,11 +22,6 @@ extern "C" {
 
 const LOCALSTORAGE_KEY: &str = "infinite-brainstorm-board";
 
-// Flag to skip file watcher reload after our own saves
-thread_local! {
-    static SKIP_NEXT_RELOAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
 fn is_tauri() -> bool {
     web_sys::window()
         .and_then(|w| js_sys::Reflect::get(&w, &JsValue::from_str("__TAURI__")).ok())
@@ -49,8 +44,6 @@ async fn load_board_storage() -> Board {
 
 async fn save_board_storage(board: &Board) {
     if is_tauri() {
-        // Set flag to skip the file watcher reload triggered by our own save
-        SKIP_NEXT_RELOAD.with(|flag| flag.set(true));
         let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: board.clone() }).unwrap();
         let _ = invoke("save_board", args).await;
     } else if let Ok(json) = serde_json::to_string(board) {
@@ -65,6 +58,13 @@ async fn save_board_storage(board: &Board) {
 #[derive(Serialize, Deserialize)]
 struct SaveBoardArgs {
     board: Board,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct PasteImageResult {
+    path: String,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -141,14 +141,6 @@ fn parse_markdown(md: &str) -> String {
     html_output
 }
 
-fn convert_path_to_asset_url(path: &str) -> String {
-    if path.starts_with("http://") || path.starts_with("https://") {
-        path.to_string()
-    } else {
-        format!("asset://localhost{}", path)
-    }
-}
-
 fn intersects_box(node: &Node, min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> bool {
     let node_right = node.x + node.width;
     let node_bottom = node.y + node.height;
@@ -182,6 +174,7 @@ pub fn App() -> impl IntoView {
     let (edge_creation, set_edge_creation) = signal(EdgeCreationState::default());
     let (resize_state, set_resize_state) = signal(ResizeState::default());
     let (cursor_style, set_cursor_style) = signal("crosshair".to_string());
+    let (last_mouse_world_pos, set_last_mouse_world_pos) = signal((0.0f64, 0.0f64));
     let (selection_box, set_selection_box) = signal::<Option<(f64, f64, f64, f64)>>(None);
     let (modal_image, set_modal_image) = signal::<Option<String>>(None);
     let (modal_md, set_modal_md) = signal::<Option<(String, bool)>>(None); // (node_id, is_editing)
@@ -191,6 +184,7 @@ pub fn App() -> impl IntoView {
     let image_cache_for_render = image_cache.clone();
     let image_cache_for_load = image_cache.clone();
     let image_cache_for_link_preview = image_cache.clone();
+    let image_cache_for_modal = image_cache.clone();
     let link_preview_cache: LinkPreviewCache = Rc::new(RefCell::new(HashMap::new()));
     let link_preview_cache_for_render = link_preview_cache.clone();
     let link_preview_cache_for_fetch = link_preview_cache.clone();
@@ -208,26 +202,15 @@ pub fn App() -> impl IntoView {
     });
 
     // File watcher listener (Tauri only)
+    // Note: Backend handles skipping emissions for our own saves
     Effect::new(move || {
         if !is_tauri() {
             return; // Skip file watching in browser mode
         }
 
         let handler = Closure::new(move |_event: JsValue| {
-            // Skip reload if this was triggered by our own save
-            let should_skip = SKIP_NEXT_RELOAD.with(|flag| {
-                if flag.get() {
-                    flag.set(false);
-                    true
-                } else {
-                    false
-                }
-            });
-
-            if should_skip {
-                return;
-            }
-
+            // Only external changes reach here (backend skips our own saves)
+            web_sys::console::log_1(&"External board change detected, reloading...".into());
             spawn_local(async move {
                 let loaded_board = load_board_storage().await;
                 set_board.set(loaded_board);
@@ -249,7 +232,6 @@ pub fn App() -> impl IntoView {
             for node in &current_board.nodes {
                 if node.node_type == "image" && !node.text.is_empty() {
                     let url = node.text.clone();
-                    let asset_url = convert_path_to_asset_url(&url);
 
                     let needs_load = {
                         let cache = image_cache.borrow();
@@ -258,39 +240,67 @@ pub fn App() -> impl IntoView {
 
                     if needs_load {
                         // Mark as loading
+                        web_sys::console::log_1(&format!("Loading image: {}", url).into());
                         image_cache.borrow_mut().insert(url.clone(), None);
 
-                        let img = HtmlImageElement::new().unwrap();
-                        let url_for_closure = url.clone();
-                        let cache_for_onload = image_cache.clone();
+                        let cache_for_async = image_cache.clone();
+                        let url_for_async = url.clone();
                         let trigger = set_image_load_trigger;
 
-                        let onload_ref = Closure::wrap(Box::new({
-                            let img = img.clone();
-                            let cache = cache_for_onload.clone();
-                            let url = url_for_closure.clone();
-                            move || {
-                                cache.borrow_mut().insert(url.clone(), Some(img.clone()));
-                                trigger.update(|n| *n = n.wrapping_add(1));
-                            }
-                        }) as Box<dyn Fn()>);
+                        spawn_local(async move {
+                            // Determine image source URL
+                            let image_src = if url_for_async.starts_with("http://") || url_for_async.starts_with("https://") {
+                                // HTTP URL - use directly
+                                url_for_async.clone()
+                            } else if is_tauri() {
+                                // Local file - use Tauri command to convert to base64
+                                #[derive(Serialize)]
+                                struct ReadImageArgs { path: String }
+                                let args = serde_wasm_bindgen::to_value(&ReadImageArgs { path: url_for_async.clone() }).unwrap();
+                                match invoke("read_image_base64", args).await.as_string() {
+                                    Some(data_url) => data_url,
+                                    None => {
+                                        web_sys::console::error_1(&format!("Failed to read image: {}", url_for_async).into());
+                                        return;
+                                    }
+                                }
+                            } else {
+                                // Browser mode - can't load local files
+                                web_sys::console::error_1(&"Local files not supported in browser mode".into());
+                                return;
+                            };
 
-                        img.set_onload(Some(onload_ref.as_ref().unchecked_ref()));
-                        onload_ref.forget();
+                            // Create image element and load
+                            let img = HtmlImageElement::new().unwrap();
+                            let url_for_closure = url_for_async.clone();
+                            let cache_for_onload = cache_for_async.clone();
 
-                        let onerror = Closure::wrap(Box::new({
-                            let cache = image_cache.clone();
-                            let url = url.clone();
-                            move || {
-                                // Keep it as None to show loading failed
-                                cache.borrow_mut().insert(url.clone(), None);
-                            }
-                        }) as Box<dyn Fn()>);
+                            let onload_ref = Closure::wrap(Box::new({
+                                let img = img.clone();
+                                let cache = cache_for_onload.clone();
+                                let url = url_for_closure.clone();
+                                move || {
+                                    web_sys::console::log_1(&format!("Image loaded successfully: {}", url).into());
+                                    cache.borrow_mut().insert(url.clone(), Some(img.clone()));
+                                    trigger.update(|n| *n = n.wrapping_add(1));
+                                }
+                            }) as Box<dyn Fn()>);
 
-                        img.set_onerror(Some(onerror.as_ref().unchecked_ref()));
-                        onerror.forget();
+                            img.set_onload(Some(onload_ref.as_ref().unchecked_ref()));
+                            onload_ref.forget();
 
-                        img.set_src(&asset_url);
+                            let onerror = Closure::wrap(Box::new({
+                                let url = url_for_async.clone();
+                                move || {
+                                    web_sys::console::error_1(&format!("Image load FAILED: {}", url).into());
+                                }
+                            }) as Box<dyn Fn()>);
+
+                            img.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+                            onerror.forget();
+
+                            img.set_src(&image_src);
+                        });
                     }
                 }
             }
@@ -661,6 +671,9 @@ pub fn App() -> impl IntoView {
             let current_board = board.get_untracked();
             let handle_size = RESIZE_HANDLE_SIZE / cam.zoom;
 
+            // Track mouse position for paste operations
+            set_last_mouse_world_pos.set((world_x, world_y));
+
             let mut new_cursor = "crosshair";
 
             // Check if over a resize handle on a selected node
@@ -781,58 +794,63 @@ pub fn App() -> impl IntoView {
         });
     };
 
-    let on_double_click = move |ev: web_sys::MouseEvent| {
-        let canvas = canvas_ref.get().unwrap();
-        let rect = canvas.get_bounding_client_rect();
-        let canvas_x = ev.client_x() as f64 - rect.left();
-        let canvas_y = ev.client_y() as f64 - rect.top();
+    let on_double_click = {
+        let image_cache_for_modal = image_cache_for_modal.clone();
+        move |ev: web_sys::MouseEvent| {
+            let canvas = canvas_ref.get().unwrap();
+            let rect = canvas.get_bounding_client_rect();
+            let canvas_x = ev.client_x() as f64 - rect.left();
+            let canvas_y = ev.client_y() as f64 - rect.top();
 
-        let cam = camera.get_untracked();
-        let (world_x, world_y) = cam.screen_to_world(canvas_x, canvas_y);
-
-        let current_board = board.get_untracked();
-        let clicked_node = current_board
-            .nodes
-            .iter()
-            .rev()
-            .find(|n| n.contains_point(world_x, world_y));
-
-        if let Some(node) = clicked_node {
-            if node.node_type == "image" {
-                // Open image in modal
-                let url = convert_path_to_asset_url(&node.text);
-                set_modal_image.set(Some(url));
-            } else if node.node_type == "md" {
-                // Open MD in modal (view mode)
-                set_modal_md.set(Some((node.id.clone(), false)));
-            } else if node.node_type == "link" {
-                // Open link in browser
-                if let Some(window) = web_sys::window() {
-                    let _ = window.open_with_url_and_target(&node.text, "_blank");
-                }
-            } else {
-                // Edit mode for text, idea, note nodes
-                set_editing_node.set(Some(node.id.clone()));
-            }
-        } else {
-            let new_node = Node::new(
-                uuid::Uuid::new_v4().to_string(),
-                world_x - 100.0,
-                world_y - 50.0,
-                "New Node".to_string(),
-            );
-            let new_id = new_node.id.clone();
-
-            set_board.update(|b| {
-                b.nodes.push(new_node);
-            });
-            set_selected_nodes.set([new_id.clone()].into_iter().collect());
-            set_editing_node.set(Some(new_id));
+            let cam = camera.get_untracked();
+            let (world_x, world_y) = cam.screen_to_world(canvas_x, canvas_y);
 
             let current_board = board.get_untracked();
-            spawn_local(async move {
-                save_board_storage(&current_board).await;
-            });
+            let clicked_node = current_board
+                .nodes
+                .iter()
+                .rev()
+                .find(|n| n.contains_point(world_x, world_y));
+
+            if let Some(node) = clicked_node {
+                if node.node_type == "image" {
+                    // Open image in modal - get src from cached HtmlImageElement
+                    let cache = image_cache_for_modal.borrow();
+                    if let Some(Some(img)) = cache.get(&node.text) {
+                        set_modal_image.set(Some(img.src()));
+                    }
+                } else if node.node_type == "md" {
+                    // Open MD in modal (view mode)
+                    set_modal_md.set(Some((node.id.clone(), false)));
+                } else if node.node_type == "link" {
+                    // Open link in browser
+                    if let Some(window) = web_sys::window() {
+                        let _ = window.open_with_url_and_target(&node.text, "_blank");
+                    }
+                } else {
+                    // Edit mode for text, idea, note nodes
+                    set_editing_node.set(Some(node.id.clone()));
+                }
+            } else {
+                let new_node = Node::new(
+                    uuid::Uuid::new_v4().to_string(),
+                    world_x - 100.0,
+                    world_y - 50.0,
+                    "New Node".to_string(),
+                );
+                let new_id = new_node.id.clone();
+
+                set_board.update(|b| {
+                    b.nodes.push(new_node);
+                });
+                set_selected_nodes.set([new_id.clone()].into_iter().collect());
+                set_editing_node.set(Some(new_id));
+
+                let current_board = board.get_untracked();
+                spawn_local(async move {
+                    save_board_storage(&current_board).await;
+                });
+            }
         }
     };
 
@@ -858,6 +876,16 @@ pub fn App() -> impl IntoView {
                         save_board_storage(&current_board).await;
                     });
                 } else if !selected.is_empty() {
+                    // Collect image paths to delete from assets folder
+                    let current_board = board.get_untracked();
+                    let image_paths_to_delete: Vec<String> = current_board
+                        .nodes
+                        .iter()
+                        .filter(|n| selected.contains(&n.id) && n.node_type == "image")
+                        .filter(|n| n.text.contains("/assets/")) // Only delete local assets
+                        .map(|n| n.text.clone())
+                        .collect();
+
                     set_board.update(|b| {
                         b.nodes.retain(|n| !selected.contains(&n.id));
                         b.edges.retain(|e| !selected.contains(&e.from_node) && !selected.contains(&e.to_node));
@@ -866,6 +894,15 @@ pub fn App() -> impl IntoView {
 
                     let current_board = board.get_untracked();
                     spawn_local(async move {
+                        // Delete asset files from disk (Tauri only)
+                        if is_tauri() {
+                            for path in image_paths_to_delete {
+                                #[derive(Serialize)]
+                                struct DeleteAssetArgs { path: String }
+                                let args = serde_wasm_bindgen::to_value(&DeleteAssetArgs { path: path.clone() }).unwrap();
+                                let _ = invoke("delete_asset", args).await;
+                            }
+                        }
                         save_board_storage(&current_board).await;
                     });
                 }
@@ -897,6 +934,54 @@ pub fn App() -> impl IntoView {
             }
             _ => {}
         }
+    };
+
+    let on_paste = move |ev: web_sys::ClipboardEvent| {
+        ev.prevent_default();
+
+        if !is_tauri() {
+            return; // Image paste only works in Tauri mode
+        }
+
+        let (world_x, world_y) = last_mouse_world_pos.get_untracked();
+
+        spawn_local(async move {
+            let result = invoke("paste_image", JsValue::NULL).await;
+
+            // Debug: log the raw result
+            web_sys::console::log_2(&"paste_image result:".into(), &result);
+
+            match serde_wasm_bindgen::from_value::<PasteImageResult>(result.clone()) {
+                Ok(paste_result) => {
+                    web_sys::console::log_1(&format!("Paste success: path={}, {}x{}", paste_result.path, paste_result.width, paste_result.height).into());
+
+                    let node_width = (paste_result.width as f64).min(400.0).max(100.0);
+                    let node_height = (paste_result.height as f64).min(400.0).max(100.0);
+
+                    let new_node = Node {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        x: world_x - node_width / 2.0,
+                        y: world_y - node_height / 2.0,
+                        width: node_width,
+                        height: node_height,
+                        text: paste_result.path,
+                        node_type: "image".to_string(),
+                    };
+                    let new_id = new_node.id.clone();
+
+                    set_board.update(|b| {
+                        b.nodes.push(new_node);
+                    });
+                    set_selected_nodes.set([new_id].into_iter().collect());
+
+                    let current_board = board.get_untracked();
+                    save_board_storage(&current_board).await;
+                }
+                Err(e) => {
+                    web_sys::console::error_1(&format!("Paste failed: {:?}", e).into());
+                }
+            }
+        });
     };
 
     let editing_node_view = move || {
@@ -1251,13 +1336,14 @@ pub fn App() -> impl IntoView {
                 on:wheel=on_wheel
                 on:dblclick=on_double_click
                 on:keydown=on_keydown
+                on:paste=on_paste
             />
             {editing_node_view}
             {md_overlays_view}
             {modal_view}
             {md_modal_view}
             <div style="position: fixed; bottom: 12px; left: 12px; color: #66cc88; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 11px; letter-spacing: 0.5px;">
-                "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [T] type  [DEL] delete"
+                "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [CMD+V] paste image  [T] type  [DEL] delete"
             </div>
         </div>
     }

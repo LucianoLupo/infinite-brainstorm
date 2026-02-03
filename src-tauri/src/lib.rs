@@ -3,9 +3,14 @@ use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_clipboard_manager::ClipboardExt;
+
+// Flag to skip file watcher emission after our own saves
+static SKIP_NEXT_EMIT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Board {
@@ -57,21 +62,14 @@ fn get_board_path(_app: &AppHandle) -> PathBuf {
     }
 }
 
-fn ensure_board_file(path: &PathBuf) {
-    if !path.exists() {
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let default_board = Board::default();
-        let json = serde_json::to_string_pretty(&default_board).unwrap();
-        let _ = fs::write(path, json);
-    }
-}
-
 #[tauri::command]
 fn load_board(app: AppHandle) -> Result<Board, String> {
     let path = get_board_path(&app);
-    ensure_board_file(&path);
+
+    // If file doesn't exist, return empty board (don't create file until user saves)
+    if !path.exists() {
+        return Ok(Board::default());
+    }
 
     let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let board: Board = serde_json::from_str(&content).map_err(|e| e.to_string())?;
@@ -81,7 +79,16 @@ fn load_board(app: AppHandle) -> Result<Board, String> {
 #[tauri::command]
 fn save_board(app: AppHandle, board: Board) -> Result<(), String> {
     let path = get_board_path(&app);
-    ensure_board_file(&path);
+
+    // Create parent directory if needed (only on actual save, not on load)
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            let _ = fs::create_dir_all(parent);
+        }
+    }
+
+    // Set flag to skip file watcher emission for our own save
+    SKIP_NEXT_EMIT.store(true, Ordering::SeqCst);
 
     let json = serde_json::to_string_pretty(&board).map_err(|e| e.to_string())?;
     fs::write(&path, json).map_err(|e| e.to_string())?;
@@ -96,6 +103,17 @@ fn get_board_path_cmd(app: AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
+    // Skip non-HTTP URLs (file://, etc.)
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Ok(LinkPreview {
+            url: url.clone(),
+            title: Some(url),
+            description: None,
+            image: None,
+            site_name: Some("Local File".to_string()),
+        });
+    }
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
@@ -154,9 +172,159 @@ async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
     })
 }
 
+fn get_assets_dir(app: &AppHandle) -> PathBuf {
+    let board_path = get_board_path(app);
+    let parent = board_path.parent().unwrap_or(&board_path);
+    parent.join("assets")
+}
+
+fn ensure_assets_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let assets_dir = get_assets_dir(app);
+    if !assets_dir.exists() {
+        fs::create_dir_all(&assets_dir).map_err(|e| format!("Failed to create assets dir: {}", e))?;
+    }
+    Ok(assets_dir)
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PasteImageResult {
+    pub path: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[tauri::command]
+fn read_image_base64(path: String) -> Result<String, String> {
+    let path = PathBuf::from(&path);
+
+    if !path.exists() {
+        return Err(format!("File not found: {}", path.display()));
+    }
+
+    let data = fs::read(&path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+
+    // Detect MIME type from extension
+    let ext = path.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        _ => "image/png",
+    };
+
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let b64 = STANDARD.encode(&data);
+
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
+#[tauri::command]
+fn delete_asset(_app: AppHandle, path: String) -> Result<(), String> {
+    let file_path = PathBuf::from(&path);
+
+    // Only allow deleting files in the assets folder (safety check)
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let assets_dir = cwd.join("assets");
+
+    // Canonicalize paths to prevent path traversal attacks
+    let canonical_file = file_path.canonicalize()
+        .map_err(|_| "File not found".to_string())?;
+    let canonical_assets = assets_dir.canonicalize()
+        .map_err(|_| "Assets folder not found".to_string())?;
+
+    if !canonical_file.starts_with(&canonical_assets) {
+        return Err("Can only delete files from assets folder".to_string());
+    }
+
+    fs::remove_file(&canonical_file)
+        .map_err(|e| format!("Failed to delete file: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn paste_image(app: AppHandle) -> Result<PasteImageResult, String> {
+    let clipboard = app.clipboard();
+
+    // Try to read image from clipboard
+    if let Ok(tauri_image) = clipboard.read_image() {
+        let width = tauri_image.width();
+        let height = tauri_image.height();
+        let rgba_data = tauri_image.rgba();
+
+        // Convert RGBA to PNG using image crate
+        let img_buffer: image::RgbaImage = image::ImageBuffer::from_raw(width, height, rgba_data.to_vec())
+            .ok_or_else(|| "Failed to create image buffer".to_string())?;
+
+        // Generate unique filename
+        let filename = format!("{}.png", uuid::Uuid::new_v4());
+        let assets_dir = ensure_assets_dir(&app)?;
+        let dest_path = assets_dir.join(&filename);
+
+        // Save as PNG
+        img_buffer.save_with_format(&dest_path, image::ImageFormat::Png)
+            .map_err(|e| format!("Failed to save image: {}", e))?;
+
+        return Ok(PasteImageResult {
+            path: dest_path.to_string_lossy().to_string(),
+            width,
+            height,
+        });
+    }
+
+    // Try to read text (might be a file path)
+    if let Ok(text) = clipboard.read_text() {
+        let text = text.trim();
+
+        // Check if it's a file path to an image
+        let path = PathBuf::from(text);
+        if path.exists() && path.is_file() {
+            let ext = path.extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            if ["png", "jpg", "jpeg", "gif", "webp", "bmp"].contains(&ext.as_str()) {
+                // Read and decode to get dimensions
+                let data = fs::read(&path)
+                    .map_err(|e| format!("Failed to read file: {}", e))?;
+                let img = image::load_from_memory(&data)
+                    .map_err(|e| format!("Failed to decode image: {}", e))?;
+
+                let width = img.width();
+                let height = img.height();
+
+                // Copy to assets folder
+                let filename = format!("{}.png", uuid::Uuid::new_v4());
+                let assets_dir = ensure_assets_dir(&app)?;
+                let dest_path = assets_dir.join(&filename);
+
+                // Save as PNG to normalize format
+                img.save_with_format(&dest_path, image::ImageFormat::Png)
+                    .map_err(|e| format!("Failed to save image: {}", e))?;
+
+                return Ok(PasteImageResult {
+                    path: dest_path.to_string_lossy().to_string(),
+                    width,
+                    height,
+                });
+            }
+        }
+    }
+
+    Err("No image found in clipboard".to_string())
+}
+
 fn setup_file_watcher(app: AppHandle) {
     let board_path = get_board_path(&app);
-    ensure_board_file(&board_path);
+    // Don't create board.json here - let user create it by adding nodes
 
     std::thread::spawn(move || {
         let (tx, rx) = channel();
@@ -173,6 +341,10 @@ fn setup_file_watcher(app: AppHandle) {
                 .expect("Failed to watch directory");
         }
 
+        // Debounce: track last emit time to avoid multiple emissions for one save
+        let mut last_emit: Option<std::time::Instant> = None;
+        let debounce_duration = Duration::from_millis(500);
+
         loop {
             match rx.recv() {
                 Ok(event) => {
@@ -186,8 +358,22 @@ fn setup_file_watcher(app: AppHandle) {
                         if is_board_file {
                             match event.kind {
                                 notify::EventKind::Modify(_) | notify::EventKind::Create(_) => {
-                                    std::thread::sleep(Duration::from_millis(100));
-                                    let _ = app.emit("board-changed", ());
+                                    // Check if we should skip this emission (our own save)
+                                    let was_skip_set = SKIP_NEXT_EMIT.swap(false, Ordering::SeqCst);
+                                    if was_skip_set {
+                                        continue; // Skip emitting for our own save
+                                    }
+
+                                    let now = std::time::Instant::now();
+                                    let should_emit = last_emit
+                                        .map(|t| now.duration_since(t) >= debounce_duration)
+                                        .unwrap_or(true);
+
+                                    if should_emit {
+                                        last_emit = Some(now);
+                                        std::thread::sleep(Duration::from_millis(100));
+                                        let _ = app.emit("board-changed", ());
+                                    }
                                 }
                                 _ => {}
                             }
@@ -208,11 +394,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             setup_file_watcher(app.handle().clone());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![load_board, save_board, get_board_path_cmd, fetch_link_preview])
+        .invoke_handler(tauri::generate_handler![load_board, save_board, get_board_path_cmd, fetch_link_preview, paste_image, read_image_base64, delete_asset])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

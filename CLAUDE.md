@@ -88,7 +88,7 @@ Read the file, parse JSON, append nodes with calculated positions, write back. U
 ┌──────────────────────────────┴──────────────────────────────────────┐
 │                        Backend (Tauri/Rust)                         │
 │  src-tauri/src/lib.rs - Commands: load_board, save_board,          │
-│                         fetch_link_preview                         │
+│                         fetch_link_preview, paste_image            │
 │                       - File watcher (notify crate)                 │
 │                       - Emits "board-changed" event on file modify  │
 └──────────────────────────────┬──────────────────────────────────────┘
@@ -178,7 +178,8 @@ infinite-brainstorm/
 ├── scripts/
 │   └── brainstorm           # CLI launcher script
 ├── Cargo.toml               # Frontend deps (leptos, web-sys, uuid)
-└── Trunk.toml               # WASM build config (ignores board.json)
+├── Trunk.toml               # WASM build config (ignores board.json)
+└── assets/                  # Pasted images (auto-created on first paste)
 ```
 
 ## board.json Schema
@@ -287,6 +288,7 @@ infinite-brainstorm/
 | Double-click md | Open markdown editor modal |
 | Double-click link | Open URL in browser |
 | Shift+drag from node | Create edge to target node |
+| Cmd/Ctrl+V | Paste image from clipboard at cursor position |
 | T | Cycle type on selected nodes (text→idea→note→image→md→link) |
 | Delete/Backspace | Delete selected nodes or edge |
 | Escape | Clear selection, cancel editing |
@@ -305,6 +307,7 @@ infinite-brainstorm/
 - ✅ CLI launcher (`brainstorm` command)
 - ✅ Dual storage (Tauri filesystem + browser localStorage)
 - ✅ Node resizing (drag corner handles, min 50x30)
+- ✅ Image paste (Cmd+V pastes clipboard image to ./assets/ folder)
 
 **Not Yet Implemented:**
 - **Undo/redo** - History stack for Ctrl+Z/Y

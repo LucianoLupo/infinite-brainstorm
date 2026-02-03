@@ -142,7 +142,7 @@
       "width": 120.0,
       "height": 50.0,
       "text": "image",
-      "node_type": "image"
+      "node_type": "text"
     },
     {
       "id": "type-md",
@@ -691,6 +691,15 @@
       "width": 200.0,
       "height": 80.0,
       "text": "Camera Transform\nworld = screen/zoom + offset\nscreen = (world - offset)*zoom",
+      "node_type": "text"
+    },
+    {
+      "id": "2c46fcbe-dcc8-44e2-9313-e8ca60ca6cb6",
+      "x": 1559.466624242945,
+      "y": 88.17414147954196,
+      "width": 200.0,
+      "height": 100.0,
+      "text": "New Node",
       "node_type": "text"
     }
   ],

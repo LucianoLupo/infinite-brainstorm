@@ -1,3 +1,4 @@
+use crate::app::is_local_md_file;
 use crate::state::{Board, Camera, LinkPreview, Node, RESIZE_HANDLE_SIZE};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -143,7 +144,11 @@ fn draw_node(
             draw_image_content(ctx, node, camera, screen_x, screen_y, screen_width, screen_height, image_cache);
         }
         "link" => {
-            draw_link_content(ctx, node, camera, screen_x, screen_y, screen_width, screen_height, image_cache, link_preview_cache);
+            // Local .md files are rendered via HTML overlay like md nodes
+            if !is_local_md_file(&node.text) {
+                draw_link_content(ctx, node, camera, screen_x, screen_y, screen_width, screen_height, image_cache, link_preview_cache);
+            }
+            // Otherwise just show background + label (content handled by HTML overlay)
         }
         "md" => {
             // MD nodes render their content via HTML overlay, just show background + label

@@ -73,6 +73,11 @@ struct FetchLinkPreviewArgs {
     url: String,
 }
 
+#[derive(Serialize, Deserialize)]
+struct ReadMarkdownFileArgs {
+    path: String,
+}
+
 #[derive(Clone, Default)]
 struct DragState {
     is_dragging: bool,
@@ -142,6 +147,15 @@ fn parse_markdown(md: &str) -> String {
     html_output
 }
 
+/// Check if a path points to a local .md file (not HTTP URL)
+pub fn is_local_md_file(path: &str) -> bool {
+    let path_lower = path.to_lowercase();
+    if !path_lower.ends_with(".md") {
+        return false;
+    }
+    path.starts_with('/') || path.starts_with("file://") || path.starts_with('~')
+}
+
 fn intersects_box(node: &Node, min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> bool {
     let node_right = node.x + node.width;
     let node_bottom = node.y + node.height;
@@ -199,6 +213,8 @@ pub fn App() -> impl IntoView {
     let link_preview_cache: LinkPreviewCache = Rc::new(RefCell::new(HashMap::new()));
     let link_preview_cache_for_render = link_preview_cache.clone();
     let link_preview_cache_for_fetch = link_preview_cache.clone();
+    // Markdown file cache stored as a signal (for local .md files in link nodes)
+    let (md_file_cache, set_md_file_cache) = signal::<HashMap<String, Option<String>>>(HashMap::new());
     let (image_load_trigger, set_image_load_trigger) = signal(0u32);
     let (link_preview_trigger, set_link_preview_trigger) = signal(0u32);
 
@@ -389,6 +405,35 @@ pub fn App() -> impl IntoView {
         }
     });
 
+    // Markdown file fetching effect (for local .md files in link nodes)
+    Effect::new(move || {
+        let current_board = board.get();
+        let current_cache = md_file_cache.get();
+
+        for node in &current_board.nodes {
+            if node.node_type == "link" && is_local_md_file(&node.text) {
+                let path = node.text.clone();
+
+                if !current_cache.contains_key(&path) {
+                    // Mark as loading
+                    set_md_file_cache.update(|c| {
+                        c.insert(path.clone(), None);
+                    });
+
+                    spawn_local(async move {
+                        let args = serde_wasm_bindgen::to_value(&ReadMarkdownFileArgs { path: path.clone() }).unwrap();
+                        let result = invoke("read_markdown_file", args).await;
+
+                        let content = result.as_string();
+                        set_md_file_cache.update(|c| {
+                            c.insert(path, content);
+                        });
+                    });
+                }
+            }
+        }
+    });
+
     Effect::new(move || {
         let current_board = board.get();
         let current_camera = camera.get();
@@ -455,6 +500,33 @@ pub fn App() -> impl IntoView {
         let (world_x, world_y) = cam.screen_to_world(canvas_x, canvas_y);
 
         let current_board = board.get_untracked();
+        let current_selected = selected_nodes.get_untracked();
+        let handle_size = RESIZE_HANDLE_SIZE / cam.zoom;
+
+        // First check if clicking on a resize handle of any selected node
+        // (handles extend outside node bounds, so check before contains_point)
+        let resize_hit = current_board.nodes.iter()
+            .filter(|n| current_selected.contains(&n.id))
+            .find_map(|n| n.resize_handle_at(world_x, world_y, handle_size).map(|h| (n, h)));
+
+        if let Some((node, handle)) = resize_hit {
+            // Record history before resize starts
+            history.borrow_mut().push(board.get_untracked());
+            // Start resize operation
+            set_resize_state.set(ResizeState {
+                is_resizing: true,
+                node_id: Some(node.id.clone()),
+                handle: Some(handle),
+                start_mouse_x: world_x,
+                start_mouse_y: world_y,
+                original_x: node.x,
+                original_y: node.y,
+                original_width: node.width,
+                original_height: node.height,
+            });
+            return;
+        }
+
         let clicked_node = current_board
             .nodes
             .iter()
@@ -471,75 +543,48 @@ pub fn App() -> impl IntoView {
                     current_y: canvas_y,
                 });
             } else {
-                let current_selected = selected_nodes.get_untracked();
-
-                // Check for resize handle on selected nodes
-                let handle_size = RESIZE_HANDLE_SIZE / cam.zoom;
-                let resize_handle = if current_selected.contains(&node.id) {
-                    node.resize_handle_at(world_x, world_y, handle_size)
-                } else {
-                    None
-                };
-
-                if let Some(handle) = resize_handle {
-                    // Record history before resize starts
-                    history.borrow_mut().push(board.get_untracked());
-                    // Start resize operation
-                    set_resize_state.set(ResizeState {
-                        is_resizing: true,
-                        node_id: Some(node.id.clone()),
-                        handle: Some(handle),
-                        start_mouse_x: world_x,
-                        start_mouse_y: world_y,
-                        original_x: node.x,
-                        original_y: node.y,
-                        original_width: node.width,
-                        original_height: node.height,
-                    });
-                } else {
-                    if ev.meta_key() || ev.ctrl_key() {
-                        set_selected_nodes.update(|s| {
-                            if !s.remove(&node.id) {
-                                s.insert(node.id.clone());
-                            }
-                        });
-                    } else if !current_selected.contains(&node.id) {
-                        set_selected_nodes.set([node.id.clone()].into_iter().collect());
-                    }
-
-                    // Copy link URL to clipboard when clicking a link node
-                    if node.node_type == "link" && !node.text.is_empty() {
-                        let url = node.text.clone();
-                        spawn_local(async move {
-                            if let Some(window) = web_sys::window() {
-                                let clipboard = window.navigator().clipboard();
-                                let _ = wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&url)).await;
-                            }
-                        });
-                    }
-
-                    let selected = selected_nodes.get_untracked();
-                    let mut start_positions = HashMap::new();
-                    for n in &current_board.nodes {
-                        if selected.contains(&n.id) {
-                            start_positions.insert(n.id.clone(), (n.x, n.y));
+                if ev.meta_key() || ev.ctrl_key() {
+                    set_selected_nodes.update(|s| {
+                        if !s.remove(&node.id) {
+                            s.insert(node.id.clone());
                         }
-                    }
-                    if start_positions.is_empty() {
-                        start_positions.insert(node.id.clone(), (node.x, node.y));
-                        set_selected_nodes.set([node.id.clone()].into_iter().collect());
-                    }
+                    });
+                } else if !current_selected.contains(&node.id) {
+                    set_selected_nodes.set([node.id.clone()].into_iter().collect());
+                }
 
-                    // Record history before drag starts
-                    history.borrow_mut().push(board.get_untracked());
-                    set_drag_state.set(DragState {
-                        is_dragging: true,
-                        is_box_selecting: false,
-                        start_x: canvas_x,
-                        start_y: canvas_y,
-                        node_start_positions: start_positions,
+                // Copy link URL to clipboard when clicking a link node
+                if node.node_type == "link" && !node.text.is_empty() {
+                    let url = node.text.clone();
+                    spawn_local(async move {
+                        if let Some(window) = web_sys::window() {
+                            let clipboard = window.navigator().clipboard();
+                            let _ = wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&url)).await;
+                        }
                     });
                 }
+
+                let selected = selected_nodes.get_untracked();
+                let mut start_positions = HashMap::new();
+                for n in &current_board.nodes {
+                    if selected.contains(&n.id) {
+                        start_positions.insert(n.id.clone(), (n.x, n.y));
+                    }
+                }
+                if start_positions.is_empty() {
+                    start_positions.insert(node.id.clone(), (node.x, node.y));
+                    set_selected_nodes.set([node.id.clone()].into_iter().collect());
+                }
+
+                // Record history before drag starts
+                history.borrow_mut().push(board.get_untracked());
+                set_drag_state.set(DragState {
+                    is_dragging: true,
+                    is_box_selecting: false,
+                    start_x: canvas_x,
+                    start_y: canvas_y,
+                    node_start_positions: start_positions,
+                });
             }
         } else {
             let clicked_edge = current_board.edges.iter().find(|edge| {
@@ -844,8 +889,11 @@ pub fn App() -> impl IntoView {
                 } else if node.node_type == "md" {
                     // Open MD in modal (view mode)
                     set_modal_md.set(Some((node.id.clone(), false)));
+                } else if node.node_type == "link" && is_local_md_file(&node.text) {
+                    // Open local .md file in modal (view mode)
+                    set_modal_md.set(Some((node.id.clone(), false)));
                 } else if node.node_type == "link" {
-                    // Open link in browser
+                    // Open regular link in browser
                     if let Some(window) = web_sys::window() {
                         let _ = window.open_with_url_and_target(&node.text, "_blank");
                     }
@@ -1197,14 +1245,29 @@ pub fn App() -> impl IntoView {
         let b = board.get();
         let cam = camera.get();
         let current_editing = editing_node.get();
+        let md_cache = md_file_cache.get();
 
         b.nodes
             .iter()
-            .filter(|n| n.node_type == "md" && current_editing.as_ref() != Some(&n.id))
+            .filter(|n| {
+                let is_md_node = n.node_type == "md";
+                let is_md_link = n.node_type == "link" && is_local_md_file(&n.text);
+                (is_md_node || is_md_link) && current_editing.as_ref() != Some(&n.id)
+            })
             .map(|node| {
                 let (screen_x, screen_y) = cam.world_to_screen(node.x, node.y);
                 let label_height = 16.0 * cam.zoom;
-                let html_content = parse_markdown(&node.text);
+
+                // Get content: either node.text (md nodes) or from cache (link nodes)
+                let content = if node.node_type == "md" {
+                    node.text.clone()
+                } else {
+                    md_cache
+                        .get(&node.text)
+                        .and_then(|opt: &Option<String>| opt.clone())
+                        .unwrap_or_else(|| "Loading...".to_string())
+                };
+                let html_content = parse_markdown(&content);
 
                 // Use transform to scale content uniformly
                 // Container is sized at 1x zoom, transform scales it
@@ -1321,25 +1384,39 @@ pub fn App() -> impl IntoView {
                                         </button>
                                     }.into_any()
                                 } else {
-                                    view! {
-                                        <button
-                                            style="background: #44dd66; color: #020202; border: none; \
-                                                   padding: 8px 16px; cursor: pointer; \
-                                                   font-family: inherit; font-size: 12px; font-weight: bold;"
-                                            on:click=move |_| {
-                                                // Enter edit mode - populate edit text from current board content
-                                                let b = board.get_untracked();
-                                                if let Some((id, _)) = modal_md.get_untracked() {
-                                                    if let Some(n) = b.nodes.iter().find(|n| n.id == id) {
-                                                        set_md_edit_text.set(n.text.clone());
+                                    // For .md link nodes, don't show Edit button (read-only)
+                                    let b = board.get();
+                                    let is_md_link = b.nodes.iter()
+                                        .find(|n| n.id == node_id)
+                                        .map(|n| n.node_type == "link" && is_local_md_file(&n.text))
+                                        .unwrap_or(false);
+
+                                    if is_md_link {
+                                        // Read-only for .md link nodes
+                                        view! {
+                                            <span style="color: #66cc88; font-size: 11px;">"[read-only]"</span>
+                                        }.into_any()
+                                    } else {
+                                        view! {
+                                            <button
+                                                style="background: #44dd66; color: #020202; border: none; \
+                                                       padding: 8px 16px; cursor: pointer; \
+                                                       font-family: inherit; font-size: 12px; font-weight: bold;"
+                                                on:click=move |_| {
+                                                    // Enter edit mode - populate edit text from current board content
+                                                    let b = board.get_untracked();
+                                                    if let Some((id, _)) = modal_md.get_untracked() {
+                                                        if let Some(n) = b.nodes.iter().find(|n| n.id == id) {
+                                                            set_md_edit_text.set(n.text.clone());
+                                                        }
+                                                        set_modal_md.set(Some((id, true)));
                                                     }
-                                                    set_modal_md.set(Some((id, true)));
                                                 }
-                                            }
-                                        >
-                                            "Edit"
-                                        </button>
-                                    }.into_any()
+                                            >
+                                                "Edit"
+                                            </button>
+                                        }.into_any()
+                                    }
                                 }
                             }}
                         </div>
@@ -1363,11 +1440,22 @@ pub fn App() -> impl IntoView {
                                         />
                                     }.into_any()
                                 } else {
-                                    // View mode - get content from board
+                                    // View mode - get content from board or cache for .md link nodes
                                     let b = board.get();
+                                    let md_cache_content = md_file_cache.get();
                                     let content = b.nodes.iter()
                                         .find(|n| n.id == nid)
-                                        .map(|n| n.text.clone())
+                                        .map(|n| {
+                                            if n.node_type == "link" && is_local_md_file(&n.text) {
+                                                // Get from cache for .md link nodes
+                                                md_cache_content
+                                                    .get(&n.text)
+                                                    .and_then(|opt: &Option<String>| opt.clone())
+                                                    .unwrap_or_else(|| "Loading...".to_string())
+                                            } else {
+                                                n.text.clone()
+                                            }
+                                        })
                                         .unwrap_or_default();
                                     let html_content = parse_markdown(&content);
                                     view! {
@@ -1407,5 +1495,76 @@ pub fn App() -> impl IntoView {
                 "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [CMD+V] paste  [T] type  [DEL] delete  [CMD+Z] undo  [CMD+SHIFT+Z] redo"
             </div>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod is_local_md_file_tests {
+        use super::*;
+
+        #[test]
+        fn absolute_path() {
+            assert!(is_local_md_file("/Users/me/vault/note.md"));
+            assert!(is_local_md_file("/path/to/file.md"));
+        }
+
+        #[test]
+        fn file_url() {
+            assert!(is_local_md_file("file:///Users/me/vault/note.md"));
+            assert!(is_local_md_file("file:///path/to/file.md"));
+        }
+
+        #[test]
+        fn file_url_with_encoded_spaces() {
+            assert!(is_local_md_file("file:///Users/me/Obsidian%20Vault/note.md"));
+        }
+
+        #[test]
+        fn home_relative_path() {
+            assert!(is_local_md_file("~/Documents/note.md"));
+            assert!(is_local_md_file("~/vault/subfolder/note.md"));
+        }
+
+        #[test]
+        fn case_insensitive_extension() {
+            assert!(is_local_md_file("/path/to/file.MD"));
+            assert!(is_local_md_file("/path/to/file.Md"));
+            assert!(is_local_md_file("~/note.MD"));
+        }
+
+        #[test]
+        fn rejects_http_urls() {
+            assert!(!is_local_md_file("http://example.com/file.md"));
+            assert!(!is_local_md_file("https://example.com/file.md"));
+        }
+
+        #[test]
+        fn rejects_non_md_files() {
+            assert!(!is_local_md_file("/path/to/file.txt"));
+            assert!(!is_local_md_file("/path/to/file.pdf"));
+            assert!(!is_local_md_file("~/document.docx"));
+            assert!(!is_local_md_file("file:///path/to/image.png"));
+        }
+
+        #[test]
+        fn rejects_relative_paths() {
+            assert!(!is_local_md_file("./note.md"));
+            assert!(!is_local_md_file("../note.md"));
+            assert!(!is_local_md_file("note.md"));
+        }
+
+        #[test]
+        fn rejects_empty_string() {
+            assert!(!is_local_md_file(""));
+        }
+
+        #[test]
+        fn handles_md_in_path_but_wrong_extension() {
+            assert!(!is_local_md_file("/path/to/markdown/file.txt"));
+            assert!(!is_local_md_file("~/Documents/md-files/note.pdf"));
+        }
     }
 }

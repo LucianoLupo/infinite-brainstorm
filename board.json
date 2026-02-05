@@ -47,8 +47,8 @@
     },
     {
       "id": "backend",
-      "x": 400.0,
-      "y": -200.0,
+      "x": 222.43852082205717,
+      "y": -204.71402157109583,
       "width": 200.0,
       "height": 80.0,
       "text": "Backend\n(Tauri Rust)",
@@ -56,8 +56,8 @@
     },
     {
       "id": "be-lib",
-      "x": 400.0,
-      "y": -350.0,
+      "x": 257.00801234342657,
+      "y": -323.28721109712365,
       "width": 200.0,
       "height": 60.0,
       "text": "lib.rs - Commands",
@@ -65,8 +65,8 @@
     },
     {
       "id": "be-watcher",
-      "x": 300.9301450318299,
-      "y": -450.0,
+      "x": 324.50025288730905,
+      "y": -442.14329738150695,
       "width": 200.0,
       "height": 60.0,
       "text": "File Watcher (notify)",
@@ -317,8 +317,8 @@
     },
     {
       "id": "research-hub",
-      "x": 700.0,
-      "y": -200.0,
+      "x": 879.1328197016414,
+      "y": -157.57380586013755,
       "width": 200.0,
       "height": 80.0,
       "text": "Research Journey",
@@ -326,8 +326,8 @@
     },
     {
       "id": "research-studied",
-      "x": 650.0,
-      "y": -350.0,
+      "x": 639.0006163341097,
+      "y": -503.9913713224637,
       "width": 160.0,
       "height": 70.0,
       "text": "What We Studied",
@@ -335,8 +335,8 @@
     },
     {
       "id": "study-figma",
-      "x": 500.0,
-      "y": -500.0,
+      "x": 473.2872110971237,
+      "y": -669.7047765594498,
       "width": 180.0,
       "height": 80.0,
       "text": "Figma Architecture\nC++ → WASM, custom WebGL",
@@ -344,8 +344,8 @@
     },
     {
       "id": "study-femtovg",
-      "x": 700.0,
-      "y": -500.0,
+      "x": 689.0006163341097,
+      "y": -653.9913713224637,
       "width": 180.0,
       "height": 80.0,
       "text": "femtovg\nGPU Canvas-like API",
@@ -353,8 +353,8 @@
     },
     {
       "id": "study-wgpu",
-      "x": 900.0,
-      "y": -500.0,
+      "x": 896.8573189526028,
+      "y": -657.1340523698609,
       "width": 180.0,
       "height": 80.0,
       "text": "wgpu + Lyon\nLow-level WebGPU",
@@ -362,8 +362,8 @@
     },
     {
       "id": "study-excalidraw",
-      "x": 600.0,
-      "y": -620.0,
+      "x": 589.0006163341097,
+      "y": -773.9913713224637,
       "width": 180.0,
       "height": 80.0,
       "text": "Excalidraw\nFlat JSON schema",
@@ -371,8 +371,8 @@
     },
     {
       "id": "study-graphite",
-      "x": 800.0,
-      "y": -620.0,
+      "x": 789.0006163341097,
+      "y": -773.9913713224637,
       "width": 180.0,
       "height": 80.0,
       "text": "Graphite Editor\nRust node-based",
@@ -380,8 +380,8 @@
     },
     {
       "id": "research-decision",
-      "x": 870.0,
-      "y": -350.0,
+      "x": 1025.5627118461623,
+      "y": -345.2859784289042,
       "width": 160.0,
       "height": 70.0,
       "text": "What We Built",
@@ -389,8 +389,8 @@
     },
     {
       "id": "decision-leptos",
-      "x": 1050.0,
-      "y": -500.0,
+      "x": 1183.5639445143818,
+      "y": -493.7146379052056,
       "width": 200.0,
       "height": 80.0,
       "text": "Leptos + HTML5 Canvas\nNot GPU renderer",
@@ -407,8 +407,8 @@
     },
     {
       "id": "research-validated",
-      "x": 760.8659200716975,
-      "y": -89.5717964869493,
+      "x": 939.9987397733388,
+      "y": -47.14560234708686,
       "width": 260.05529921416905,
       "height": 123.10882646971277,
       "text": "Core Thesis Validated ✓\nAI edits JSON → App reacts\nCollaboration surface works!",
@@ -416,8 +416,8 @@
     },
     {
       "id": "link-obsidian-research",
-      "x": 1094.9072560199277,
-      "y": -269.0991425408245,
+      "x": 1274.040075721569,
+      "y": -226.67294840096207,
       "width": 280.0,
       "height": 120.0,
       "text": "file:///Users/lucianolupo/Documents/Obsidian%20Vault/30_Resources/AI%20Engineering/Rust%20WASM%20Canvas%20App%20-%20Research.md",
@@ -694,22 +694,22 @@
       "node_type": "text"
     },
     {
-      "id": "2c46fcbe-dcc8-44e2-9313-e8ca60ca6cb6",
-      "x": 1559.466624242945,
-      "y": 88.17414147954196,
-      "width": 200.0,
-      "height": 100.0,
-      "text": "New Node",
-      "node_type": "text"
+      "id": "link-obsidian-test",
+      "x": 1596.43009681186,
+      "y": -2.2325782500948037,
+      "width": 350.0,
+      "height": 300.0,
+      "text": "~/Documents/Obsidian Vault/00_Inbox/Agent-Native Security Tools in Rust.md",
+      "node_type": "link"
     },
     {
-      "id": "5968dc39-0264-446e-8350-165eca3ae7ca",
-      "x": 1144.0,
-      "y": 529.0,
-      "width": 200.0,
-      "height": 100.0,
-      "text": "aaaNew Node",
-      "node_type": "text"
+      "id": "link-obsidian-encoded",
+      "x": 1621.2424330115216,
+      "y": 348.8819772099199,
+      "width": 582.5487403366535,
+      "height": 457.76562362273035,
+      "text": "file:///Users/lucianolupo/Documents/Obsidian%20Vault/00_Inbox/2026-01-10-karpathy-behind-new-skill-tree.md",
+      "node_type": "link"
     }
   ],
   "edges": [

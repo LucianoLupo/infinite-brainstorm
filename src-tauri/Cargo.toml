@@ -31,4 +31,6 @@ scraper = "0.21"
 uuid = { version = "1", features = ["v4"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 base64 = "0.22"
+dirs = "5"
+urlencoding = "2"
 

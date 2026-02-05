@@ -226,6 +226,27 @@ fn read_image_base64(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn read_markdown_file(path: String) -> Result<String, String> {
+    // Expand ~ to home directory, strip file:// prefix, and URL-decode
+    let expanded = if path.starts_with('~') {
+        dirs::home_dir()
+            .map(|h| path.replacen('~', &h.to_string_lossy(), 1))
+            .unwrap_or(path)
+    } else if path.starts_with("file://") {
+        let stripped = path.strip_prefix("file://").unwrap_or(&path);
+        // URL-decode the path (handles %20 for spaces, etc.)
+        urlencoding::decode(stripped)
+            .map(|s| s.into_owned())
+            .unwrap_or_else(|_| stripped.to_string())
+    } else {
+        path
+    };
+
+    std::fs::read_to_string(&expanded)
+        .map_err(|e| format!("Failed to read {}: {}", expanded, e))
+}
+
+#[tauri::command]
 fn delete_asset(_app: AppHandle, path: String) -> Result<(), String> {
     let file_path = PathBuf::from(&path);
 
@@ -399,7 +420,7 @@ pub fn run() {
             setup_file_watcher(app.handle().clone());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![load_board, save_board, get_board_path_cmd, fetch_link_preview, paste_image, read_image_base64, delete_asset])
+        .invoke_handler(tauri::generate_handler![load_board, save_board, get_board_path_cmd, fetch_link_preview, paste_image, read_image_base64, read_markdown_file, delete_asset])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -704,6 +725,139 @@ mod tests {
             let deserialized: Node = serde_json::from_str(&json).unwrap();
             assert!((deserialized.x - 123.456789).abs() < 1e-6);
             assert!((deserialized.y - 987.654321).abs() < 1e-6);
+        }
+    }
+
+    mod read_markdown_file_tests {
+        use super::*;
+
+        #[test]
+        fn reads_absolute_path() {
+            let dir = std::env::temp_dir();
+            let path = dir.join("test_read_absolute.md");
+            let content = "# Test\nHello world";
+            std::fs::write(&path, content).unwrap();
+
+            let result = read_markdown_file(path.to_string_lossy().to_string());
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), content);
+
+            std::fs::remove_file(&path).ok();
+        }
+
+        #[test]
+        fn reads_file_url() {
+            let dir = std::env::temp_dir();
+            let path = dir.join("test_read_file_url.md");
+            let content = "# File URL Test";
+            std::fs::write(&path, content).unwrap();
+
+            let file_url = format!("file://{}", path.to_string_lossy());
+            let result = read_markdown_file(file_url);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), content);
+
+            std::fs::remove_file(&path).ok();
+        }
+
+        #[test]
+        fn decodes_url_encoded_spaces() {
+            let dir = std::env::temp_dir();
+            let subdir = dir.join("test folder");
+            std::fs::create_dir_all(&subdir).ok();
+            let path = subdir.join("test file.md");
+            let content = "# Spaces in path";
+            std::fs::write(&path, content).unwrap();
+
+            // URL encode the path with %20 for spaces
+            let encoded_path = format!(
+                "file://{}",
+                path.to_string_lossy().replace(' ', "%20")
+            );
+            let result = read_markdown_file(encoded_path);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), content);
+
+            std::fs::remove_file(&path).ok();
+            std::fs::remove_dir(&subdir).ok();
+        }
+
+        #[test]
+        fn expands_home_tilde() {
+            // This test verifies tilde expansion works
+            // We can only test the path transformation, not the actual read
+            // unless we create a file in the actual home directory
+            let home = dirs::home_dir().unwrap();
+            let test_file = home.join(".brainstorm_test_temp.md");
+            let content = "# Home test";
+            std::fs::write(&test_file, content).unwrap();
+
+            let result = read_markdown_file("~/.brainstorm_test_temp.md".to_string());
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), content);
+
+            std::fs::remove_file(&test_file).ok();
+        }
+
+        #[test]
+        fn returns_error_for_nonexistent_file() {
+            let result = read_markdown_file("/nonexistent/path/to/file.md".to_string());
+            assert!(result.is_err());
+            assert!(result.unwrap_err().contains("Failed to read"));
+        }
+
+        #[test]
+        fn handles_unicode_content() {
+            let dir = std::env::temp_dir();
+            let path = dir.join("test_unicode.md");
+            let content = "# Unicode Test\n日本語 中文 한국어 🎉";
+            std::fs::write(&path, content).unwrap();
+
+            let result = read_markdown_file(path.to_string_lossy().to_string());
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), content);
+
+            std::fs::remove_file(&path).ok();
+        }
+
+        #[test]
+        fn handles_empty_file() {
+            let dir = std::env::temp_dir();
+            let path = dir.join("test_empty.md");
+            std::fs::write(&path, "").unwrap();
+
+            let result = read_markdown_file(path.to_string_lossy().to_string());
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), "");
+
+            std::fs::remove_file(&path).ok();
+        }
+
+        #[test]
+        fn handles_multiple_encoded_characters() {
+            let dir = std::env::temp_dir();
+            // Create a path with multiple special chars that need encoding
+            let subdir = dir.join("test & folder");
+            std::fs::create_dir_all(&subdir).ok();
+            let path = subdir.join("notes (copy).md");
+            let content = "# Special chars in path";
+            std::fs::write(&path, content).unwrap();
+
+            // URL encode special characters
+            let encoded_path = format!(
+                "file://{}",
+                path.to_string_lossy()
+                    .replace(' ', "%20")
+                    .replace('&', "%26")
+                    .replace('(', "%28")
+                    .replace(')', "%29")
+            );
+            let result = read_markdown_file(encoded_path);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), content);
+
+            std::fs::remove_file(&path).ok();
+            std::fs::remove_dir(&subdir).ok();
         }
     }
 }

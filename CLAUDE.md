@@ -247,7 +247,12 @@ infinite-brainstorm/
 
 **Markdown node:** Set `text` field to markdown content. Rendered HTML displays in the node.
 
-**Link node:** Set `text` field to a URL. Fetches Open Graph metadata and displays preview image. Click copies URL to clipboard, double-click opens in browser.
+**Link node:** Set `text` field to a URL. For HTTP/HTTPS URLs, fetches Open Graph metadata and displays preview image. Click copies URL to clipboard, double-click opens in browser.
+
+**Local .md links:** Link nodes with paths to local `.md` files render as read-only markdown:
+- Absolute path: `/Users/me/vault/note.md`
+- file:// URL: `file:///Users/me/vault/note.md`
+- Home-relative: `~/Documents/note.md`
 
 ## Conventions
 
@@ -287,7 +292,7 @@ infinite-brainstorm/
 | Double-click node | Edit node text inline |
 | Double-click image | Open image in 90% viewport modal |
 | Double-click md | Open markdown editor modal |
-| Double-click link | Open URL in browser |
+| Double-click link | Open URL in browser (or view-only modal for local .md files) |
 | Shift+drag from node | Create edge to target node |
 | Cmd/Ctrl+V | Paste image from clipboard at cursor position |
 | T | Cycle type on selected nodes (text→idea→note→image→md→link) |
@@ -312,11 +317,11 @@ infinite-brainstorm/
 - ✅ Node resizing (drag corner handles, min 50x30)
 - ✅ Image paste (Cmd+V pastes clipboard image to ./assets/ folder)
 - ✅ Undo/redo (Cmd+Z / Cmd+Shift+Z) - Max 100 history entries
+- ✅ Local .md links as markdown - Link nodes pointing to local `.md` files render as markdown (read-only) for seamless Obsidian vault integration
 
 **Not Yet Implemented:**
 - **Multi-board** - Multiple board files, board switcher
 - **CRDT (Loro)** - Real-time collaboration
-- **Local .md links as markdown** - When a link node points to a local filesystem .md file (e.g., `file:///path/to/obsidian/note.md`), render it as a markdown node instead of a link preview. This would enable seamless integration with Obsidian vaults.
 
 **Agent-Native Feature Ideas:**
 - **Semantic zoom** - Show node summaries when zoomed out

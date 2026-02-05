@@ -1,4 +1,5 @@
 use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache};
+use crate::history::History;
 use crate::state::{Board, Camera, Edge, LinkPreview, Node, ResizeHandle, RESIZE_HANDLE_SIZE, MIN_NODE_WIDTH, MIN_NODE_HEIGHT};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -179,6 +180,16 @@ pub fn App() -> impl IntoView {
     let (modal_image, set_modal_image) = signal::<Option<String>>(None);
     let (modal_md, set_modal_md) = signal::<Option<(String, bool)>>(None); // (node_id, is_editing)
     let (md_edit_text, set_md_edit_text) = signal::<String>(String::new()); // Separate signal to avoid re-render on typing
+
+    // Undo/redo history - using Rc<RefCell> since mutations don't need reactivity
+    type BoardHistory = Rc<RefCell<History<Board>>>;
+    let history: BoardHistory = Rc::new(RefCell::new(History::new(100)));
+    let history_for_mouse_down = history.clone();
+    let history_for_mouse_up = history.clone();
+    let history_for_double_click = history.clone();
+    let history_for_keydown = history.clone();
+    let history_for_paste = history;  // Last clone can take ownership
+
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
     let image_cache: ImageCache = Rc::new(RefCell::new(HashMap::new()));
     let image_cache_for_render = image_cache.clone();
@@ -427,7 +438,9 @@ pub fn App() -> impl IntoView {
         }
     });
 
-    let on_mouse_down = move |ev: web_sys::MouseEvent| {
+    let on_mouse_down = {
+        let history = history_for_mouse_down.clone();
+        move |ev: web_sys::MouseEvent| {
         if editing_node.get_untracked().is_some() {
             return;
         }
@@ -469,6 +482,8 @@ pub fn App() -> impl IntoView {
                 };
 
                 if let Some(handle) = resize_handle {
+                    // Record history before resize starts
+                    history.borrow_mut().push(board.get_untracked());
                     // Start resize operation
                     set_resize_state.set(ResizeState {
                         is_resizing: true,
@@ -515,6 +530,8 @@ pub fn App() -> impl IntoView {
                         set_selected_nodes.set([node.id.clone()].into_iter().collect());
                     }
 
+                    // Record history before drag starts
+                    history.borrow_mut().push(board.get_untracked());
                     set_drag_state.set(DragState {
                         is_dragging: true,
                         is_box_selecting: false,
@@ -566,7 +583,7 @@ pub fn App() -> impl IntoView {
                 }
             }
         }
-    };
+    }};
 
     let on_mouse_move = move |ev: web_sys::MouseEvent| {
         let canvas = canvas_ref.get().unwrap();
@@ -697,7 +714,9 @@ pub fn App() -> impl IntoView {
         }
     };
 
-    let on_mouse_up = move |ev: web_sys::MouseEvent| {
+    let on_mouse_up = {
+        let history = history_for_mouse_up.clone();
+        move |ev: web_sys::MouseEvent| {
         let was_dragging = drag_state.get_untracked().is_dragging;
         let was_resizing = resize_state.get_untracked().is_resizing;
         let current_drag = drag_state.get_untracked();
@@ -725,6 +744,8 @@ pub fn App() -> impl IntoView {
                 let current_board = board.get_untracked();
                 if let Some(target) = current_board.nodes.iter().rev().find(|n| n.contains_point(world_x, world_y)) {
                     if &target.id != from_id {
+                        // Record history before edge creation
+                        history.borrow_mut().push(board.get_untracked());
                         set_board.update(|b| {
                             b.edges.push(Edge {
                                 id: uuid::Uuid::new_v4().to_string(),
@@ -772,7 +793,7 @@ pub fn App() -> impl IntoView {
                 save_board_storage(&current_board).await;
             });
         }
-    };
+    }};
 
     let on_wheel = move |ev: web_sys::WheelEvent| {
         ev.prevent_default();
@@ -795,6 +816,7 @@ pub fn App() -> impl IntoView {
     };
 
     let on_double_click = {
+        let history = history_for_double_click.clone();
         let image_cache_for_modal = image_cache_for_modal.clone();
         move |ev: web_sys::MouseEvent| {
             let canvas = canvas_ref.get().unwrap();
@@ -840,6 +862,8 @@ pub fn App() -> impl IntoView {
                 );
                 let new_id = new_node.id.clone();
 
+                // Record history before node creation
+                history.borrow_mut().push(board.get_untracked());
                 set_board.update(|b| {
                     b.nodes.push(new_node);
                 });
@@ -854,7 +878,9 @@ pub fn App() -> impl IntoView {
         }
     };
 
-    let on_keydown = move |ev: web_sys::KeyboardEvent| {
+    let on_keydown = {
+        let history = history_for_keydown.clone();
+        move |ev: web_sys::KeyboardEvent| {
         if editing_node.get_untracked().is_some() {
             return;
         }
@@ -864,8 +890,34 @@ pub fn App() -> impl IntoView {
         let edge_sel = selected_edge.get_untracked();
 
         match key.as_str() {
+            "z" if ev.meta_key() || ev.ctrl_key() => {
+                ev.prevent_default();
+                if ev.shift_key() {
+                    // Redo: Ctrl+Shift+Z / Cmd+Shift+Z
+                    if let Some(new_board) = history.borrow_mut().redo(board.get_untracked()) {
+                        set_board.set(new_board.clone());
+                        set_selected_nodes.set(HashSet::new());
+                        set_selected_edge.set(None);
+                        spawn_local(async move {
+                            save_board_storage(&new_board).await;
+                        });
+                    }
+                } else {
+                    // Undo: Ctrl+Z / Cmd+Z
+                    if let Some(new_board) = history.borrow_mut().undo(board.get_untracked()) {
+                        set_board.set(new_board.clone());
+                        set_selected_nodes.set(HashSet::new());
+                        set_selected_edge.set(None);
+                        spawn_local(async move {
+                            save_board_storage(&new_board).await;
+                        });
+                    }
+                }
+            }
             "Backspace" | "Delete" => {
                 if let Some(edge_id) = edge_sel {
+                    // Record history before edge deletion
+                    history.borrow_mut().push(board.get_untracked());
                     set_board.update(|b| {
                         b.edges.retain(|e| e.id != edge_id);
                     });
@@ -886,6 +938,8 @@ pub fn App() -> impl IntoView {
                         .map(|n| n.text.clone())
                         .collect();
 
+                    // Record history before node deletion
+                    history.borrow_mut().push(board.get_untracked());
                     set_board.update(|b| {
                         b.nodes.retain(|n| !selected.contains(&n.id));
                         b.edges.retain(|e| !selected.contains(&e.from_node) && !selected.contains(&e.to_node));
@@ -909,6 +963,8 @@ pub fn App() -> impl IntoView {
             }
             "t" | "T" => {
                 if !selected.is_empty() {
+                    // Record history before type change
+                    history.borrow_mut().push(board.get_untracked());
                     set_board.update(|b| {
                         for node in &mut b.nodes {
                             if selected.contains(&node.id) {
@@ -934,9 +990,11 @@ pub fn App() -> impl IntoView {
             }
             _ => {}
         }
-    };
+    }};
 
-    let on_paste = move |ev: web_sys::ClipboardEvent| {
+    let on_paste = {
+        let history = history_for_paste.clone();
+        move |ev: web_sys::ClipboardEvent| {
         ev.prevent_default();
 
         if !is_tauri() {
@@ -944,6 +1002,7 @@ pub fn App() -> impl IntoView {
         }
 
         let (world_x, world_y) = last_mouse_world_pos.get_untracked();
+        let history = history.clone();
 
         spawn_local(async move {
             let result = invoke("paste_image", JsValue::NULL).await;
@@ -969,6 +1028,8 @@ pub fn App() -> impl IntoView {
                     };
                     let new_id = new_node.id.clone();
 
+                    // Record history before image paste
+                    history.borrow_mut().push(board.get_untracked());
                     set_board.update(|b| {
                         b.nodes.push(new_node);
                     });
@@ -982,7 +1043,7 @@ pub fn App() -> impl IntoView {
                 }
             }
         });
-    };
+    }};
 
     let editing_node_view = move || {
         if let Some(node_id) = editing_node.get() {
@@ -1331,7 +1392,7 @@ pub fn App() -> impl IntoView {
                 style=move || format!("width: 100%; height: 100%; display: block; cursor: {}; outline: none;", cursor_style.get())
                 on:mousedown=on_mouse_down
                 on:mousemove=on_mouse_move
-                on:mouseup=on_mouse_up
+                on:mouseup=on_mouse_up.clone()
                 on:mouseleave=on_mouse_up
                 on:wheel=on_wheel
                 on:dblclick=on_double_click
@@ -1343,7 +1404,7 @@ pub fn App() -> impl IntoView {
             {modal_view}
             {md_modal_view}
             <div style="position: fixed; bottom: 12px; left: 12px; color: #66cc88; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 11px; letter-spacing: 0.5px;">
-                "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [CMD+V] paste image  [T] type  [DEL] delete"
+                "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [CMD+V] paste  [T] type  [DEL] delete  [CMD+Z] undo  [CMD+SHIFT+Z] redo"
             </div>
         </div>
     }

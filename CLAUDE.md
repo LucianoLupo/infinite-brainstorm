@@ -166,6 +166,7 @@ infinite-brainstorm/
 │   ├── main.rs              # Entry point, mounts App component
 │   ├── app.rs               # Main component with all interactions
 │   ├── canvas.rs            # Canvas rendering functions
+│   ├── history.rs           # Undo/redo history stack
 │   └── state.rs             # Data types: Board, Node, Edge, Camera
 ├── src-tauri/               # Backend (Tauri Rust)
 │   ├── src/
@@ -291,6 +292,8 @@ infinite-brainstorm/
 | Cmd/Ctrl+V | Paste image from clipboard at cursor position |
 | T | Cycle type on selected nodes (text→idea→note→image→md→link) |
 | Delete/Backspace | Delete selected nodes or edge |
+| Cmd/Ctrl+Z | Undo last action |
+| Cmd/Ctrl+Shift+Z | Redo last undone action |
 | Escape | Clear selection, cancel editing |
 
 ## Future Ideas
@@ -308,9 +311,9 @@ infinite-brainstorm/
 - ✅ Dual storage (Tauri filesystem + browser localStorage)
 - ✅ Node resizing (drag corner handles, min 50x30)
 - ✅ Image paste (Cmd+V pastes clipboard image to ./assets/ folder)
+- ✅ Undo/redo (Cmd+Z / Cmd+Shift+Z) - Max 100 history entries
 
 **Not Yet Implemented:**
-- **Undo/redo** - History stack for Ctrl+Z/Y
 - **Multi-board** - Multiple board files, board switcher
 - **CRDT (Loro)** - Real-time collaboration
 - **Local .md links as markdown** - When a link node points to a local filesystem .md file (e.g., `file:///path/to/obsidian/note.md`), render it as a markdown node instead of a link preview. This would enable seamless integration with Obsidian vaults.

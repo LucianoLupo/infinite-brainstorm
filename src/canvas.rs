@@ -127,12 +127,14 @@ fn draw_node(
     ctx.fill_rect(screen_x, screen_y, screen_width, screen_height);
 
     if is_selected {
-        ctx.set_stroke_style_str(BORDER_SELECTED);
+        let border = node.color.as_deref().unwrap_or(BORDER_SELECTED);
+        ctx.set_stroke_style_str(border);
         ctx.set_line_width(1.0);
-        ctx.set_shadow_color(BORDER_SELECTED);
+        ctx.set_shadow_color(border);
         ctx.set_shadow_blur(8.0);
     } else {
-        ctx.set_stroke_style_str(BORDER_COLOR);
+        let border = node.color.as_deref().unwrap_or(BORDER_COLOR);
+        ctx.set_stroke_style_str(border);
         ctx.set_line_width(1.0);
         ctx.set_shadow_blur(0.0);
     }
@@ -185,7 +187,33 @@ fn draw_node(
     ctx.set_font(&format!("{}px {}", small_font, FONT));
     ctx.set_text_align("left");
     ctx.set_text_baseline("top");
-    let _ = ctx.fill_text(type_indicator, screen_x + 4.0 * camera.zoom, screen_y + 4.0 * camera.zoom);
+    let pad = 4.0 * camera.zoom;
+    let _ = ctx.fill_text(type_indicator, screen_x + pad, screen_y + pad);
+
+    if let Some(priority) = node.priority {
+        let p_text = format!("P{}", priority.min(5));
+        let type_width = ctx.measure_text(type_indicator).map(|m| m.width()).unwrap_or(30.0);
+        let _ = ctx.fill_text(&p_text, screen_x + pad + type_width + pad, screen_y + pad);
+    }
+
+    if let Some(ref status) = node.status {
+        ctx.set_text_align("right");
+        let _ = ctx.fill_text(status, screen_x + screen_width - pad, screen_y + pad);
+    }
+
+    if !node.tags.is_empty() {
+        let tags_text = node.tags.join(", ");
+        let tag_font = (8.0 * camera.zoom).max(5.0);
+        ctx.set_font(&format!("{}px {}", tag_font, FONT));
+        ctx.set_text_align("left");
+        ctx.set_text_baseline("bottom");
+        let _ = ctx.fill_text_with_max_width(
+            &tags_text,
+            screen_x + pad,
+            screen_y + screen_height - pad,
+            screen_width - 2.0 * pad,
+        );
+    }
 
     if is_selected {
         draw_resize_handles(ctx, screen_x, screen_y, screen_width, screen_height, camera.zoom);

@@ -36,6 +36,11 @@ brainstorm /path/to/project
 {"id": "uuid", "x": 0, "y": 0, "width": 200, "height": 100, "text": "Hello", "node_type": "text"}
 ```
 
+**Node with metadata:**
+```json
+{"id": "uuid", "x": 0, "y": 0, "width": 200, "height": 100, "text": "Hello", "node_type": "idea", "color": "#ff6600", "tags": ["urgent"], "status": "todo", "group": "g1", "priority": 1}
+```
+
 **Node types:** `"text"` (gray), `"idea"` (green), `"note"` (amber), `"image"` (blue), `"md"` (purple), `"link"` (indigo)
 
 **Edge:** `{"id": "uuid", "from_node": "node-id-1", "to_node": "node-id-2"}`
@@ -223,6 +228,20 @@ infinite-brainstorm/
       "height": 200.0,
       "text": "https://github.com/anthropics/claude-code",
       "node_type": "link"
+    },
+    {
+      "id": "metadata-example-uuid",
+      "x": 100.0,
+      "y": 400.0,
+      "width": 200.0,
+      "height": 100.0,
+      "text": "A categorized node",
+      "node_type": "idea",
+      "color": "#ff6600",
+      "tags": ["urgent", "pricing"],
+      "status": "in-progress",
+      "group": "cluster-a",
+      "priority": 2
     }
   ],
   "edges": [
@@ -233,6 +252,36 @@ infinite-brainstorm/
     }
   ]
 }
+```
+
+### Node Metadata (optional)
+
+All metadata fields are optional and backward-compatible. Existing `board.json` files without these fields work unchanged. Fields are omitted from JSON when empty/None.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `color` | `string?` | null | Custom border color override (hex, e.g. `"#ff6600"`) |
+| `tags` | `string[]` | `[]` | Freeform tags for categorization |
+| `status` | `string?` | null | Workflow status (e.g. `"todo"`, `"in-progress"`, `"done"`) |
+| `group` | `string?` | null | Group ID for clustering related nodes |
+| `priority` | `number?` | null | Priority level (1-5) |
+
+**Visual rendering:**
+- `color` overrides the node border color (both selected and unselected states)
+- `tags` render as comma-separated text at the bottom-left of the node
+- `status` renders as a small badge at the top-right corner
+- `priority` renders as `P1`-`P5` next to the type indicator
+
+**Agent usage examples:**
+```bash
+# Add tags to categorize nodes
+jq '.nodes[] | select(.text | contains("pricing")) | .tags = ["pricing", "v2"]' board.json
+
+# Set workflow status
+jq '.nodes[] | select(.id == "node-id") | .status = "done"' board.json
+
+# Color-code by group
+jq '.nodes[] | select(.group == "cluster-a") | .color = "#ff6600"' board.json
 ```
 
 **Node types and colors:**
@@ -327,7 +376,7 @@ infinite-brainstorm/
 - **Semantic zoom** - Show node summaries when zoomed out
 - **Auto-layout commands** - Claude Code can trigger layout algorithms
 - **Board templates** - Predefined structures (mind map, kanban, flowchart)
-- **Node metadata** - Additional fields Claude Code can use for categorization
+- ✅ **Node metadata** - Optional `color`, `tags`, `status`, `group`, `priority` fields for agent categorization
 
 ## Troubleshooting
 

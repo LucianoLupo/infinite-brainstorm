@@ -1115,6 +1115,11 @@ pub fn App() -> impl IntoView {
                         height: node_height,
                         text: paste_result.path,
                         node_type: "image".to_string(),
+                        color: None,
+                        tags: Vec::new(),
+                        status: None,
+                        group: None,
+                        priority: None,
                     };
                     let new_id = new_node.id.clone();
 

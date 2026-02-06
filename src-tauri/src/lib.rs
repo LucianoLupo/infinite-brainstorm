@@ -28,6 +28,16 @@ pub struct Node {
     pub text: String,
     #[serde(default = "default_node_type")]
     pub node_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
 }
 
 fn default_node_type() -> String {
@@ -451,6 +461,11 @@ mod tests {
                         height: 100.0,
                         text: "First".to_string(),
                         node_type: "text".to_string(),
+                        color: None,
+                        tags: vec![],
+                        status: None,
+                        group: None,
+                        priority: None,
                     },
                     Node {
                         id: "n2".to_string(),
@@ -460,6 +475,11 @@ mod tests {
                         height: 100.0,
                         text: "Second".to_string(),
                         node_type: "idea".to_string(),
+                        color: None,
+                        tags: vec![],
+                        status: None,
+                        group: None,
+                        priority: None,
                     },
                 ],
                 edges: vec![Edge {
@@ -498,6 +518,68 @@ mod tests {
         }
 
         #[test]
+        fn deserialize_old_json_without_metadata_fields() {
+            let json = r#"{
+                "nodes": [{
+                    "id": "n1",
+                    "x": 0, "y": 0, "width": 200, "height": 100,
+                    "text": "Old node", "node_type": "idea"
+                }],
+                "edges": []
+            }"#;
+            let board: Board = serde_json::from_str(json).unwrap();
+            let node = &board.nodes[0];
+            assert!(node.color.is_none());
+            assert!(node.tags.is_empty());
+            assert!(node.status.is_none());
+            assert!(node.group.is_none());
+            assert!(node.priority.is_none());
+        }
+
+        #[test]
+        fn serde_round_trip_with_metadata() {
+            let node = Node {
+                id: "m1".to_string(),
+                x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+                text: "Meta".to_string(),
+                node_type: "note".to_string(),
+                color: Some("#ff0000".to_string()),
+                tags: vec!["tag1".to_string(), "tag2".to_string()],
+                status: Some("done".to_string()),
+                group: Some("g1".to_string()),
+                priority: Some(1),
+            };
+            let json = serde_json::to_string(&node).unwrap();
+            let deserialized: Node = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized.color, node.color);
+            assert_eq!(deserialized.tags, node.tags);
+            assert_eq!(deserialized.status, node.status);
+            assert_eq!(deserialized.group, node.group);
+            assert_eq!(deserialized.priority, node.priority);
+        }
+
+        #[test]
+        fn skip_serializing_empty_metadata() {
+            let node = Node {
+                id: "n1".to_string(),
+                x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+                text: "Plain".to_string(),
+                node_type: "text".to_string(),
+                color: None,
+                tags: vec![],
+                status: None,
+                group: None,
+                priority: None,
+            };
+            let json = serde_json::to_string(&node).unwrap();
+            assert!(!json.contains("color"));
+            assert!(!json.contains("tags"));
+            assert!(!json.contains("status"));
+            assert!(!json.contains("group"));
+            assert!(!json.contains("priority"));
+        }
+
+        #[test]
         fn serialize_produces_valid_json() {
             let board = Board {
                 nodes: vec![Node {
@@ -508,6 +590,11 @@ mod tests {
                     height: 100.0,
                     text: "Hello \"world\"".to_string(),
                     node_type: "text".to_string(),
+                    color: None,
+                    tags: vec![],
+                    status: None,
+                    group: None,
+                    priority: None,
                 }],
                 edges: vec![],
             };
@@ -563,6 +650,11 @@ mod tests {
                     height: 100.0,
                     text: format!("Content for node {}", i),
                     node_type: "text".to_string(),
+                    color: None,
+                    tags: vec![],
+                    status: None,
+                    group: None,
+                    priority: None,
                 })
                 .collect();
 
@@ -586,6 +678,11 @@ mod tests {
                     height: 100.0,
                     text: format!("Node {}", i),
                     node_type: "text".to_string(),
+                    color: None,
+                    tags: vec![],
+                    status: None,
+                    group: None,
+                    priority: None,
                 })
                 .collect();
 
@@ -622,6 +719,11 @@ mod tests {
                 height: 100.0,
                 text: large_text.clone(),
                 node_type: "text".to_string(),
+                color: None,
+                tags: vec![],
+                status: None,
+                group: None,
+                priority: None,
             };
 
             let board = Board { nodes: vec![node], edges: vec![] };
@@ -646,6 +748,11 @@ mod tests {
                 height: 100.0,
                 text: text.to_string(),
                 node_type: "text".to_string(),
+                color: None,
+                tags: vec![],
+                status: None,
+                group: None,
+                priority: None,
             };
 
             let json = serde_json::to_string(&node).unwrap();
@@ -664,6 +771,11 @@ mod tests {
                 height: 100.0,
                 text: text.to_string(),
                 node_type: "text".to_string(),
+                color: None,
+                tags: vec![],
+                status: None,
+                group: None,
+                priority: None,
             };
 
             let json = serde_json::to_string(&node).unwrap();
@@ -683,6 +795,11 @@ mod tests {
                     height: 100.0,
                     text: "content".to_string(),
                     node_type: node_type.to_string(),
+                    color: None,
+                    tags: vec![],
+                    status: None,
+                    group: None,
+                    priority: None,
                 };
 
                 let json = serde_json::to_string(&node).unwrap();
@@ -701,6 +818,11 @@ mod tests {
                 height: 100.0,
                 text: "negative".to_string(),
                 node_type: "text".to_string(),
+                color: None,
+                tags: vec![],
+                status: None,
+                group: None,
+                priority: None,
             };
 
             let json = serde_json::to_string(&node).unwrap();
@@ -719,6 +841,11 @@ mod tests {
                 height: 100.789,
                 text: "precise".to_string(),
                 node_type: "text".to_string(),
+                color: None,
+                tags: vec![],
+                status: None,
+                group: None,
+                priority: None,
             };
 
             let json = serde_json::to_string(&node).unwrap();

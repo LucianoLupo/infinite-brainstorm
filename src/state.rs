@@ -28,6 +28,16 @@ pub struct Node {
     pub text: String,
     #[serde(default = "default_node_type")]
     pub node_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<u8>,
 }
 
 fn default_node_type() -> String {
@@ -44,6 +54,11 @@ impl Node {
             height: 100.0,
             text,
             node_type: "text".to_string(),
+            color: None,
+            tags: Vec::new(),
+            status: None,
+            group: None,
+            priority: None,
         }
     }
 
@@ -226,6 +241,11 @@ mod tests {
             assert_eq!(node.height, 100.0);
             assert_eq!(node.text, "Hello");
             assert_eq!(node.node_type, "text");
+            assert_eq!(node.color, None);
+            assert!(node.tags.is_empty());
+            assert_eq!(node.status, None);
+            assert_eq!(node.group, None);
+            assert_eq!(node.priority, None);
         }
 
         #[test]
@@ -338,6 +358,11 @@ mod tests {
                         height: 100.0,
                         text: "Second".to_string(),
                         node_type: "idea".to_string(),
+                        color: None,
+                        tags: Vec::new(),
+                        status: None,
+                        group: None,
+                        priority: None,
                     },
                 ],
                 edges: vec![Edge {
@@ -369,6 +394,68 @@ mod tests {
 
             let board: Board = serde_json::from_str(json).unwrap();
             assert_eq!(board.nodes[0].node_type, "text");
+        }
+
+        #[test]
+        fn deserialize_old_json_without_metadata_fields() {
+            let json = r#"{
+                "nodes": [{
+                    "id": "n1",
+                    "x": 0, "y": 0, "width": 200, "height": 100,
+                    "text": "Old node", "node_type": "idea"
+                }],
+                "edges": []
+            }"#;
+            let board: Board = serde_json::from_str(json).unwrap();
+            let node = &board.nodes[0];
+            assert_eq!(node.color, None);
+            assert!(node.tags.is_empty());
+            assert_eq!(node.status, None);
+            assert_eq!(node.group, None);
+            assert_eq!(node.priority, None);
+        }
+
+        #[test]
+        fn serde_round_trip_with_metadata() {
+            let node = Node {
+                id: "m1".to_string(),
+                x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+                text: "Meta node".to_string(),
+                node_type: "idea".to_string(),
+                color: Some("#ff6600".to_string()),
+                tags: vec!["urgent".to_string(), "pricing".to_string()],
+                status: Some("in-progress".to_string()),
+                group: Some("cluster-a".to_string()),
+                priority: Some(2),
+            };
+            let json = serde_json::to_string(&node).unwrap();
+            let deserialized: Node = serde_json::from_str(&json).unwrap();
+            assert_eq!(node, deserialized);
+        }
+
+        #[test]
+        fn skip_serializing_empty_metadata() {
+            let node = Node::new("n1".to_string(), 0.0, 0.0, "Plain".to_string());
+            let json = serde_json::to_string(&node).unwrap();
+            assert!(!json.contains("color"));
+            assert!(!json.contains("tags"));
+            assert!(!json.contains("status"));
+            assert!(!json.contains("group"));
+            assert!(!json.contains("priority"));
+        }
+
+        #[test]
+        fn serialize_includes_set_metadata() {
+            let mut node = Node::new("n1".to_string(), 0.0, 0.0, "Tagged".to_string());
+            node.color = Some("#00ff00".to_string());
+            node.tags = vec!["test".to_string()];
+            node.priority = Some(3);
+            let json = serde_json::to_string(&node).unwrap();
+            assert!(json.contains("\"color\":\"#00ff00\""));
+            assert!(json.contains("\"tags\":[\"test\"]"));
+            assert!(json.contains("\"priority\":3"));
+            assert!(!json.contains("\"status\""));
+            assert!(!json.contains("\"group\""));
         }
     }
 
@@ -468,6 +555,11 @@ mod tests {
                 height: 25.0,
                 text: "tiny".to_string(),
                 node_type: "text".to_string(),
+                color: None,
+                tags: Vec::new(),
+                status: None,
+                group: None,
+                priority: None,
             };
             assert!(node.contains_point(25.0, 12.0));
             assert!(node.contains_point(50.0, 25.0));

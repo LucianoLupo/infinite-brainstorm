@@ -7,7 +7,9 @@
       "width": 320.0,
       "height": 100.0,
       "text": "Infinite Brainstorm\nTauri v2 + Leptos + Rust WASM",
-      "node_type": "idea"
+      "node_type": "idea",
+      "color": "#ff8800",
+      "priority": 1
     },
     {
       "id": "frontend",
@@ -173,26 +175,30 @@
     },
     {
       "id": "feat-sync",
-      "x": 357.44313652984823,
-      "y": 221.5899738388569,
+      "x": 269.713188298911,
+      "y": 159.74755131540937,
       "width": 160.0,
       "height": 50.0,
       "text": "Real-time sync",
-      "node_type": "note"
+      "node_type": "note",
+      "color": "#00ccff",
+      "group": "core-features"
     },
     {
       "id": "feat-agent",
-      "x": 1017.8847133231728,
-      "y": 408.76727985444745,
+      "x": 961.7950742902784,
+      "y": 270.7004760811692,
       "width": 160.0,
       "height": 50.0,
       "text": "Agent-native",
-      "node_type": "note"
+      "node_type": "note",
+      "color": "#00ccff",
+      "group": "core-features"
     },
     {
       "id": "future-ideas",
-      "x": 613.9229238503569,
-      "y": 314.9888605988006,
+      "x": 536.260346727888,
+      "y": 409.9097881929294,
       "width": 160.0,
       "height": 60.0,
       "text": "Future Ideas",
@@ -200,12 +206,17 @@
     },
     {
       "id": "future-md-links",
-      "x": 280.47170415031184,
-      "y": 417.8458151447539,
+      "x": 191.5818667682464,
+      "y": 434.24258130040465,
       "width": 273.0,
       "height": 145.0,
-      "text": "Local .md links → render as mdfile:// links to Obsidian vaultshould display as markdown nodes",
-      "node_type": "note"
+      "text": "Local .md links → render as md\n✓ Shipped in v1",
+      "node_type": "note",
+      "tags": [
+        "shipped",
+        "v1"
+      ],
+      "status": "done"
     },
     {
       "id": "future-undo",
@@ -213,8 +224,12 @@
       "y": 590.6690655899819,
       "width": 140.0,
       "height": 50.0,
-      "text": "Undo/Redo",
-      "node_type": "note"
+      "text": "Undo/Redo ✓",
+      "node_type": "note",
+      "tags": [
+        "shipped"
+      ],
+      "status": "done"
     },
     {
       "id": "future-crdt",
@@ -222,8 +237,13 @@
       "y": 650.375107770995,
       "width": 160.0,
       "height": 50.0,
-      "text": "Loro CRDT collab",
-      "node_type": "note"
+      "text": "Loro CRDT collab\n(not yet implemented)",
+      "node_type": "note",
+      "tags": [
+        "v2"
+      ],
+      "status": "todo",
+      "priority": 3
     },
     {
       "id": "leptos-hub",
@@ -407,17 +427,20 @@
     },
     {
       "id": "research-validated",
-      "x": 939.9987397733388,
-      "y": -47.14560234708686,
+      "x": 1605.6876252833404,
+      "y": -107.42451717673268,
       "width": 260.05529921416905,
       "height": 123.10882646971277,
       "text": "Core Thesis Validated ✓\nAI edits JSON → App reacts\nCollaboration surface works!",
-      "node_type": "idea"
+      "node_type": "idea",
+      "color": "#00ff88",
+      "status": "validated",
+      "priority": 1
     },
     {
       "id": "link-obsidian-research",
-      "x": 1274.040075721569,
-      "y": -226.67294840096207,
+      "x": 1679.2845180205409,
+      "y": -495.1151267391345,
       "width": 280.0,
       "height": 120.0,
       "text": "file:///Users/lucianolupo/Documents/Obsidian%20Vault/30_Resources/AI%20Engineering/Rust%20WASM%20Canvas%20App%20-%20Research.md",
@@ -447,7 +470,7 @@
       "y": 1094.6042614657897,
       "width": 220.0,
       "height": 120.0,
-      "text": "Leptos Signals\n• board, set_board\n• camera, set_camera\n• selected_nodes\n• drag_state, pan_state\n• editing_node\n• modal_image, modal_md",
+      "text": "BoardCtx (19 signals)\n• board, camera\n• selected_nodes/edge\n• editing_node\n• drag/pan/resize state\n• edge_creation\n• modal_image, modal_md\n• md_edit_text\n• md_file_cache",
       "node_type": "note"
     },
     {
@@ -465,7 +488,7 @@
       "y": 1133.916070786466,
       "width": 220.0,
       "height": 120.0,
-      "text": "Event Handlers\n• on_mouse_down\n• on_mouse_move\n• on_mouse_up\n• on_wheel (zoom)\n• on_double_click\n• on_keydown",
+      "text": "Event Handlers\n• on_mouse_down/move/up\n• on_wheel (zoom)\n• on_double_click\n• on_keydown\n• on_paste (Cmd+V)",
       "node_type": "note"
     },
     {
@@ -474,7 +497,7 @@
       "y": 1362.539689427819,
       "width": 220.0,
       "height": 100.0,
-      "text": "View Components\n• Canvas element\n• Editing overlay (input/textarea)\n• MD overlays (HTML render)\n• Image modal\n• MD modal",
+      "text": "Components (src/components/)\n• NodeEditor\n• MarkdownOverlays\n• ImageModal\n• MarkdownModal\nAll use BoardCtx context",
       "node_type": "note"
     },
     {
@@ -501,7 +524,7 @@
       "y": 1425.502875830968,
       "width": 200.0,
       "height": 100.0,
-      "text": "draw_node()\n• Background by type\n• Border (selected glow)\n• Type-specific content:\n  - text/idea/note: text\n  - image: thumbnail\n  - link: OG preview",
+      "text": "draw_node()\n• Background by type\n• Border (color override)\n• Tags, status, priority\n• Type-specific content:\n  text/image/link/md",
       "node_type": "text"
     },
     {
@@ -510,7 +533,7 @@
       "y": 1531.9157109156804,
       "width": 200.0,
       "height": 80.0,
-      "text": "Caches (Rc<RefCell>)\n• ImageCache\n• LinkPreviewCache",
+      "text": "Caches\n• ImageCache (Rc<RefCell>)\n• LinkPreviewCache\n• md_file_cache (signal)",
       "node_type": "note"
     },
     {
@@ -537,7 +560,7 @@
       "y": 1168.5153529078211,
       "width": 180.0,
       "height": 100.0,
-      "text": "Node {\n  id, x, y\n  width, height\n  text, node_type\n}\n+ contains_point()",
+      "text": "Node {\n  id, x, y\n  width, height\n  text, node_type\n  color?, tags[]\n  status?, group?\n  priority?\n}",
       "node_type": "text"
     },
     {
@@ -572,8 +595,8 @@
       "x": 1790.313034616503,
       "y": 1116.6511853944053,
       "width": 200.0,
-      "height": 100.0,
-      "text": "Tauri Commands\n• load_board()\n• save_board()\n• get_board_path_cmd()\n• fetch_link_preview()",
+      "height": 130.0,
+      "text": "Tauri Commands (8)\n• load/save_board\n• get_board_path_cmd\n• fetch_link_preview\n• paste_image\n• read_image_base64\n• read_markdown_file\n• delete_asset",
       "node_type": "text"
     },
     {
@@ -695,8 +718,8 @@
     },
     {
       "id": "link-obsidian-test",
-      "x": 1621.9019772163697,
-      "y": -21.04934248168406,
+      "x": 2037.4711186821944,
+      "y": -201.73157790160775,
       "width": 583.781315675164,
       "height": 313.8695382108994,
       "text": "~/Documents/Obsidian Vault/00_Inbox/Agent-Native Security Tools in Rust.md",
@@ -710,6 +733,83 @@
       "height": 457.76562362273035,
       "text": "file:///Users/lucianolupo/Documents/Obsidian%20Vault/00_Inbox/2026-01-10-karpathy-behind-new-skill-tree.md",
       "node_type": "link"
+    },
+    {
+      "id": "feat-metadata",
+      "x": 936.2355152120438,
+      "y": 153.3713920993601,
+      "width": 180.0,
+      "height": 60.0,
+      "text": "Node Metadatacolor, tags, status, group, priority",
+      "node_type": "note",
+      "color": "#00ccff",
+      "tags": [
+        "shipped",
+        "v1.1"
+      ],
+      "status": "done",
+      "group": "core-features"
+    },
+    {
+      "id": "feat-image",
+      "x": 218.3830933967631,
+      "y": 220.69711367948804,
+      "width": 160.0,
+      "height": 50.0,
+      "text": "Image nodes + paste",
+      "node_type": "note",
+      "status": "done",
+      "group": "core-features"
+    },
+    {
+      "id": "feat-resize",
+      "x": 290.2928870286788,
+      "y": 292.1353095521264,
+      "width": 160.0,
+      "height": 50.0,
+      "text": "Node resizing",
+      "node_type": "note",
+      "status": "done",
+      "group": "core-features"
+    },
+    {
+      "id": "feat-edges",
+      "x": 840.0,
+      "y": 370.0,
+      "width": 160.0,
+      "height": 50.0,
+      "text": "Edges + multi-select",
+      "node_type": "note",
+      "status": "done",
+      "group": "core-features"
+    },
+    {
+      "id": "future-multiboard",
+      "x": 380.0,
+      "y": 650.0,
+      "width": 160.0,
+      "height": 50.0,
+      "text": "Multi-board switcher",
+      "node_type": "note",
+      "tags": [
+        "v2"
+      ],
+      "status": "todo",
+      "priority": 4
+    },
+    {
+      "id": "future-semantic-zoom",
+      "x": 710.0,
+      "y": 710.0,
+      "width": 180.0,
+      "height": 50.0,
+      "text": "Semantic zoom (summaries)",
+      "node_type": "note",
+      "tags": [
+        "v2"
+      ],
+      "status": "todo",
+      "priority": 5
     }
   ],
   "edges": [
@@ -1097,6 +1197,36 @@
       "id": "e80",
       "from_node": "coords-screen",
       "to_node": "coords-transform"
+    },
+    {
+      "id": "e-feat-metadata",
+      "from_node": "features",
+      "to_node": "feat-metadata"
+    },
+    {
+      "id": "e-feat-image",
+      "from_node": "features",
+      "to_node": "feat-image"
+    },
+    {
+      "id": "e-feat-resize",
+      "from_node": "features",
+      "to_node": "feat-resize"
+    },
+    {
+      "id": "e-feat-edges",
+      "from_node": "features",
+      "to_node": "feat-edges"
+    },
+    {
+      "id": "e-future-multiboard",
+      "from_node": "future-ideas",
+      "to_node": "future-multiboard"
+    },
+    {
+      "id": "e-future-semzoom",
+      "from_node": "future-ideas",
+      "to_node": "future-semantic-zoom"
     }
   ]
 }

@@ -1,4 +1,5 @@
 use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache};
+use crate::components::{ImageModal, MarkdownModal, MarkdownOverlays, NodeEditor};
 use crate::history::History;
 use crate::state::{Board, Camera, Edge, LinkPreview, Node, ResizeHandle, RESIZE_HANDLE_SIZE, MIN_NODE_WIDTH, MIN_NODE_HEIGHT};
 use leptos::prelude::*;
@@ -43,7 +44,7 @@ async fn load_board_storage() -> Board {
     }
 }
 
-async fn save_board_storage(board: &Board) {
+pub(crate) async fn save_board_storage(board: &Board) {
     if is_tauri() {
         let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: board.clone() }).unwrap();
         let _ = invoke("save_board", args).await;
@@ -140,7 +141,7 @@ fn cycle_node_type(current: &str) -> String {
     }
 }
 
-fn parse_markdown(md: &str) -> String {
+pub(crate) fn parse_markdown(md: &str) -> String {
     let parser = Parser::new(md);
     let mut html_output = String::new();
     html::push_html(&mut html_output, parser);
@@ -175,6 +176,27 @@ fn point_near_line(px: f64, py: f64, x1: f64, y1: f64, x2: f64, y2: f64, thresho
     let closest_y = y1 + t * dy;
     let dist = ((px - closest_x).powi(2) + (py - closest_y).powi(2)).sqrt();
     dist < threshold
+}
+
+#[derive(Clone, Copy)]
+pub struct BoardCtx {
+    pub board: ReadSignal<Board>,
+    pub set_board: WriteSignal<Board>,
+    pub camera: ReadSignal<Camera>,
+    pub set_camera: WriteSignal<Camera>,
+    pub selected_nodes: ReadSignal<HashSet<String>>,
+    pub set_selected_nodes: WriteSignal<HashSet<String>>,
+    pub selected_edge: ReadSignal<Option<String>>,
+    pub set_selected_edge: WriteSignal<Option<String>>,
+    pub editing_node: ReadSignal<Option<String>>,
+    pub set_editing_node: WriteSignal<Option<String>>,
+    pub modal_image: ReadSignal<Option<String>>,
+    pub set_modal_image: WriteSignal<Option<String>>,
+    pub modal_md: ReadSignal<Option<(String, bool)>>,
+    pub set_modal_md: WriteSignal<Option<(String, bool)>>,
+    pub md_edit_text: ReadSignal<String>,
+    pub set_md_edit_text: WriteSignal<String>,
+    pub md_file_cache: ReadSignal<HashMap<String, Option<String>>>,
 }
 
 #[component]
@@ -217,6 +239,26 @@ pub fn App() -> impl IntoView {
     let (md_file_cache, set_md_file_cache) = signal::<HashMap<String, Option<String>>>(HashMap::new());
     let (image_load_trigger, set_image_load_trigger) = signal(0u32);
     let (link_preview_trigger, set_link_preview_trigger) = signal(0u32);
+
+    provide_context(BoardCtx {
+        board,
+        set_board,
+        camera,
+        set_camera,
+        selected_nodes,
+        set_selected_nodes,
+        selected_edge,
+        set_selected_edge,
+        editing_node,
+        set_editing_node,
+        modal_image,
+        set_modal_image,
+        modal_md,
+        set_modal_md,
+        md_edit_text,
+        set_md_edit_text,
+        md_file_cache,
+    });
 
     // Load board on startup (with small delay to ensure Tauri is ready)
     Effect::new(move || {
@@ -1093,385 +1135,6 @@ pub fn App() -> impl IntoView {
         });
     }};
 
-    let editing_node_view = move || {
-        if let Some(node_id) = editing_node.get() {
-            let b = board.get();
-            let cam = camera.get();
-            if let Some(node) = b.nodes.iter().find(|n| n.id == node_id) {
-                let (screen_x, screen_y) = cam.world_to_screen(node.x, node.y);
-                let screen_w = node.width * cam.zoom;
-                let screen_h = node.height * cam.zoom;
-                let font_size = (14.0 * cam.zoom).max(8.0);
-                let initial_text = node.text.clone();
-                let is_md = node.node_type == "md";
-
-                if is_md {
-                    // MD nodes use textarea for multi-line editing
-                    let node_id_for_blur = node_id.clone();
-                    let on_blur_textarea = move |ev: web_sys::FocusEvent| {
-                        if let Some(target) = ev.target() {
-                            if let Ok(textarea) = target.dyn_into::<web_sys::HtmlTextAreaElement>() {
-                                let new_text = textarea.value();
-                                let node_id_clone = node_id_for_blur.clone();
-                                set_board.update(|b| {
-                                    if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
-                                        node.text = new_text;
-                                    }
-                                });
-
-                                let current_board = board.get_untracked();
-                                spawn_local(async move {
-                                    save_board_storage(&current_board).await;
-                                });
-                            }
-                        }
-                        set_editing_node.set(None);
-                    };
-
-                    let node_id_for_keydown = node_id.clone();
-                    let on_keydown_textarea = move |ev: web_sys::KeyboardEvent| {
-                        if ev.key().as_str() == "Escape" {
-                            if let Some(target) = ev.target() {
-                                if let Ok(textarea) = target.dyn_into::<web_sys::HtmlTextAreaElement>() {
-                                    let new_text = textarea.value();
-                                    let node_id_clone = node_id_for_keydown.clone();
-                                    set_board.update(|b| {
-                                        if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
-                                            node.text = new_text;
-                                        }
-                                    });
-
-                                    let current_board = board.get_untracked();
-                                    spawn_local(async move {
-                                        save_board_storage(&current_board).await;
-                                    });
-                                }
-                            }
-                            set_editing_node.set(None);
-                        }
-                    };
-
-                    return Some(view! {
-                        <textarea
-                            autofocus=true
-                            style=format!(
-                                "position: absolute; left: {}px; top: {}px; width: {}px; height: {}px; \
-                                 font-size: {}px; background: #020202; resize: none; \
-                                 color: #ccffdd; border: 1px solid #aaffbb; outline: none; \
-                                 box-sizing: border-box; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
-                                 text-shadow: 0 0 6px #aaffbb; padding: 8px;",
-                                screen_x, screen_y, screen_w, screen_h, font_size
-                            )
-                            on:blur=on_blur_textarea
-                            on:keydown=on_keydown_textarea
-                        >{initial_text}</textarea>
-                    }.into_any());
-                } else {
-                    // Regular nodes use input
-                    let node_id_for_blur = node_id.clone();
-                    let on_blur = move |ev: web_sys::FocusEvent| {
-                        if let Some(target) = ev.target() {
-                            if let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() {
-                                let new_text = input.value();
-                                let node_id_clone = node_id_for_blur.clone();
-                                set_board.update(|b| {
-                                    if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
-                                        node.text = new_text;
-                                    }
-                                });
-
-                                let current_board = board.get_untracked();
-                                spawn_local(async move {
-                                    save_board_storage(&current_board).await;
-                                });
-                            }
-                        }
-                        set_editing_node.set(None);
-                    };
-
-                    let node_id_for_keydown = node_id.clone();
-                    let on_keydown = move |ev: web_sys::KeyboardEvent| {
-                        match ev.key().as_str() {
-                            "Enter" => {
-                                if let Some(target) = ev.target() {
-                                    if let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() {
-                                        let new_text = input.value();
-                                        let node_id_clone = node_id_for_keydown.clone();
-                                        set_board.update(|b| {
-                                            if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
-                                                node.text = new_text;
-                                            }
-                                        });
-
-                                        let current_board = board.get_untracked();
-                                        spawn_local(async move {
-                                            save_board_storage(&current_board).await;
-                                        });
-                                        set_editing_node.set(None);
-                                    }
-                                }
-                            }
-                            "Escape" => {
-                                set_editing_node.set(None);
-                            }
-                            _ => {}
-                        }
-                    };
-
-                    return Some(view! {
-                        <input
-                            type="text"
-                            value=initial_text
-                            autofocus=true
-                            style=format!(
-                                "position: absolute; left: {}px; top: {}px; width: {}px; height: {}px; \
-                                 font-size: {}px; text-align: center; background: #020202; \
-                                 color: #ccffdd; border: 1px solid #aaffbb; outline: none; \
-                                 box-sizing: border-box; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
-                                 text-shadow: 0 0 6px #aaffbb;",
-                                screen_x, screen_y, screen_w, screen_h, font_size
-                            )
-                            on:blur=on_blur
-                            on:keydown=on_keydown
-                        />
-                    }.into_any());
-                }
-            }
-        }
-        None
-    };
-
-    let md_overlays_view = move || {
-        let b = board.get();
-        let cam = camera.get();
-        let current_editing = editing_node.get();
-        let md_cache = md_file_cache.get();
-
-        b.nodes
-            .iter()
-            .filter(|n| {
-                let is_md_node = n.node_type == "md";
-                let is_md_link = n.node_type == "link" && is_local_md_file(&n.text);
-                (is_md_node || is_md_link) && current_editing.as_ref() != Some(&n.id)
-            })
-            .map(|node| {
-                let (screen_x, screen_y) = cam.world_to_screen(node.x, node.y);
-                let label_height = 16.0 * cam.zoom;
-
-                // Get content: either node.text (md nodes) or from cache (link nodes)
-                let content = if node.node_type == "md" {
-                    node.text.clone()
-                } else {
-                    md_cache
-                        .get(&node.text)
-                        .and_then(|opt: &Option<String>| opt.clone())
-                        .unwrap_or_else(|| "Loading...".to_string())
-                };
-                let html_content = parse_markdown(&content);
-
-                // Use transform to scale content uniformly
-                // Container is sized at 1x zoom, transform scales it
-                let base_w = node.width;
-                let base_h = node.height - 16.0; // Account for label
-                let base_padding = 8.0;
-
-                view! {
-                    <div
-                        style=format!(
-                            "position: absolute; left: {}px; top: {}px; \
-                             width: {}px; height: {}px; overflow: hidden; \
-                             transform: scale({}); transform-origin: top left; \
-                             padding: {}px; box-sizing: border-box; \
-                             color: #ccffdd; font-size: 12px; line-height: 1.4; \
-                             font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
-                             pointer-events: none;",
-                            screen_x, screen_y + label_height,
-                            base_w, base_h,
-                            cam.zoom,
-                            base_padding
-                        )
-                        inner_html=html_content
-                    />
-                }
-            })
-            .collect::<Vec<_>>()
-    };
-
-    let modal_view = move || {
-        modal_image.get().map(|image_url| view! {
-                <div
-                    style="position: fixed; inset: 0; background: rgba(0,0,0,0.9); \
-                           display: flex; align-items: center; justify-content: center; \
-                           z-index: 1000; cursor: pointer;"
-                    on:click=move |_| set_modal_image.set(None)
-                >
-                    <img
-                        src=image_url
-                        style="max-width: 90vw; max-height: 90vh; object-fit: contain; \
-                               border: 1px solid #44dd66; box-shadow: 0 0 30px rgba(68, 221, 102, 0.3);"
-                    />
-                </div>
-            })
-    };
-
-    let md_modal_view = move || {
-        if let Some((node_id, is_editing)) = modal_md.get() {
-            let node_id_for_edit = node_id.clone();
-            let node_id_for_save = node_id.clone();
-            let node_id_for_content = node_id.clone();
-
-            Some(view! {
-                <div
-                    style="position: fixed; inset: 0; background: rgba(0,0,0,0.9); \
-                           display: flex; align-items: center; justify-content: center; \
-                           z-index: 1000;"
-                    on:click=move |_| set_modal_md.set(None)
-                >
-                    <div
-                        style="width: 90vw; max-width: 800px; height: 80vh; \
-                               background: #020202; border: 1px solid #44dd66; \
-                               box-shadow: 0 0 30px rgba(68, 221, 102, 0.3); \
-                               padding: 24px; display: flex; flex-direction: column; \
-                               font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
-                               color: #ccffdd; font-size: 14px; line-height: 1.6;"
-                        on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()
-                    >
-                        <div
-                            style="margin-bottom: 16px; padding-bottom: 16px; \
-                                   border-bottom: 1px solid #44dd66; \
-                                   display: flex; justify-content: flex-end; gap: 8px;"
-                        >
-                            {move || {
-                                let node_id = node_id_for_edit.clone();
-                                let node_id_save = node_id_for_save.clone();
-                                if is_editing {
-                                    view! {
-                                        <button
-                                            style="background: transparent; color: #66cc88; border: 1px solid #66cc88; \
-                                                   padding: 8px 16px; cursor: pointer; \
-                                                   font-family: inherit; font-size: 12px;"
-                                            on:click=move |_| {
-                                                // Cancel - revert to view mode
-                                                set_modal_md.set(Some((node_id.clone(), false)));
-                                            }
-                                        >
-                                            "Cancel"
-                                        </button>
-                                        <button
-                                            style="background: #44dd66; color: #020202; border: none; \
-                                                   padding: 8px 16px; cursor: pointer; \
-                                                   font-family: inherit; font-size: 12px; font-weight: bold;"
-                                            on:click=move |_| {
-                                                // Save - get content from edit signal and update board
-                                                let new_content = md_edit_text.get_untracked();
-                                                let nid = node_id_save.clone();
-                                                set_board.update(|b| {
-                                                    if let Some(node) = b.nodes.iter_mut().find(|n| n.id == nid) {
-                                                        node.text = new_content;
-                                                    }
-                                                });
-
-                                                let current_board = board.get_untracked();
-                                                spawn_local(async move {
-                                                    save_board_storage(&current_board).await;
-                                                });
-
-                                                // Switch back to view mode
-                                                set_modal_md.set(Some((node_id_save.clone(), false)));
-                                            }
-                                        >
-                                            "Save"
-                                        </button>
-                                    }.into_any()
-                                } else {
-                                    // For .md link nodes, don't show Edit button (read-only)
-                                    let b = board.get();
-                                    let is_md_link = b.nodes.iter()
-                                        .find(|n| n.id == node_id)
-                                        .map(|n| n.node_type == "link" && is_local_md_file(&n.text))
-                                        .unwrap_or(false);
-
-                                    if is_md_link {
-                                        // Read-only for .md link nodes
-                                        view! {
-                                            <span style="color: #66cc88; font-size: 11px;">"[read-only]"</span>
-                                        }.into_any()
-                                    } else {
-                                        view! {
-                                            <button
-                                                style="background: #44dd66; color: #020202; border: none; \
-                                                       padding: 8px 16px; cursor: pointer; \
-                                                       font-family: inherit; font-size: 12px; font-weight: bold;"
-                                                on:click=move |_| {
-                                                    // Enter edit mode - populate edit text from current board content
-                                                    let b = board.get_untracked();
-                                                    if let Some((id, _)) = modal_md.get_untracked() {
-                                                        if let Some(n) = b.nodes.iter().find(|n| n.id == id) {
-                                                            set_md_edit_text.set(n.text.clone());
-                                                        }
-                                                        set_modal_md.set(Some((id, true)));
-                                                    }
-                                                }
-                                            >
-                                                "Edit"
-                                            </button>
-                                        }.into_any()
-                                    }
-                                }
-                            }}
-                        </div>
-                        <div style="flex: 1; overflow-y: auto; min-height: 0;">
-                            {move || {
-                                let nid = node_id_for_content.clone();
-                                if is_editing {
-                                    // Use md_edit_text signal for textarea - updates don't re-render modal
-                                    view! {
-                                        <textarea
-                                            style="width: 100%; height: 100%; background: #020202; \
-                                                   color: #ccffdd; border: 1px solid #33aa55; \
-                                                   font-family: inherit; font-size: 14px; \
-                                                   padding: 12px; box-sizing: border-box; resize: none; \
-                                                   outline: none;"
-                                            prop:value=move || md_edit_text.get()
-                                            on:input=move |ev| {
-                                                let value = event_target_value(&ev);
-                                                set_md_edit_text.set(value);
-                                            }
-                                        />
-                                    }.into_any()
-                                } else {
-                                    // View mode - get content from board or cache for .md link nodes
-                                    let b = board.get();
-                                    let md_cache_content = md_file_cache.get();
-                                    let content = b.nodes.iter()
-                                        .find(|n| n.id == nid)
-                                        .map(|n| {
-                                            if n.node_type == "link" && is_local_md_file(&n.text) {
-                                                // Get from cache for .md link nodes
-                                                md_cache_content
-                                                    .get(&n.text)
-                                                    .and_then(|opt: &Option<String>| opt.clone())
-                                                    .unwrap_or_else(|| "Loading...".to_string())
-                                            } else {
-                                                n.text.clone()
-                                            }
-                                        })
-                                        .unwrap_or_default();
-                                    let html_content = parse_markdown(&content);
-                                    view! {
-                                        <div inner_html=html_content />
-                                    }.into_any()
-                                }
-                            }}
-                        </div>
-                    </div>
-                </div>
-            })
-        } else {
-            None
-        }
-    };
-
     view! {
         <div style="width: 100vw; height: 100vh; overflow: hidden; background: #020202; position: relative;">
             <canvas
@@ -1487,10 +1150,10 @@ pub fn App() -> impl IntoView {
                 on:keydown=on_keydown
                 on:paste=on_paste
             />
-            {editing_node_view}
-            {md_overlays_view}
-            {modal_view}
-            {md_modal_view}
+            <NodeEditor/>
+            <MarkdownOverlays/>
+            <ImageModal/>
+            <MarkdownModal/>
             <div style="position: fixed; bottom: 12px; left: 12px; color: #66cc88; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 11px; letter-spacing: 0.5px;">
                 "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [CMD+V] paste  [T] type  [DEL] delete  [CMD+Z] undo  [CMD+SHIFT+Z] redo"
             </div>

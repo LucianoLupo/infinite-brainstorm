@@ -3,7 +3,8 @@
 # Usage: brainstorm [path]
 #   path: Directory to use for board.json (default: current directory)
 
-BINARY="/Users/lucianolupo/projects/infinite-brainstorm/target/release/infinite-brainstorm"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BINARY="$SCRIPT_DIR/../target/release/infinite-brainstorm"
 
 if [ ! -f "$BINARY" ]; then
     echo "Error: Binary not found at $BINARY"

@@ -264,14 +264,8 @@ Example - 5 nodes around a center:
 - Use `tags` for agent-driven filtering and categorization
 - Use `status` + `priority` for kanban-style workflows
 
-## Project Location
+## Development
 
-```
-/Users/lucianolupo/projects/infinite-brainstorm/
-```
-
-For development:
 ```bash
-cd /Users/lucianolupo/projects/infinite-brainstorm
 cargo tauri dev
 ```

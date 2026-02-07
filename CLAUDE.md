@@ -183,6 +183,9 @@ infinite-brainstorm/
 │   └── tauri.conf.json      # App config, window settings
 ├── scripts/
 │   └── brainstorm           # CLI launcher script
+├── .claude/skills/infinite-brainstorm/  # Claude Code skill + board templates
+│   ├── SKILL.md             # Skill instructions (schema, layouts, operations)
+│   └── templates/           # 6 board templates (mind-map, kanban, flowchart, swot, pros-cons, timeline)
 ├── Cargo.toml               # Frontend deps (leptos, web-sys, uuid)
 ├── Trunk.toml               # WASM build config (ignores board.json)
 └── assets/                  # Pasted images (auto-created on first paste)
@@ -372,11 +375,12 @@ jq '.nodes[] | select(.group == "cluster-a") | .color = "#ff6600"' board.json
 - **Multi-board** - Multiple board files, board switcher
 - **CRDT (Loro)** - Real-time collaboration
 
-**Agent-Native Feature Ideas:**
-- **Semantic zoom** - Show node summaries when zoomed out
-- **Auto-layout commands** - Claude Code can trigger layout algorithms
-- **Board templates** - Predefined structures (mind map, kanban, flowchart)
+**Agent-Native Features:**
 - ✅ **Node metadata** - Optional `color`, `tags`, `status`, `group`, `priority` fields for agent categorization
+- ✅ **Directed edges** - Arrows with arrowheads, lines clip to node borders
+- ✅ **Auto-layout algorithms** - Layout math documented in skill for Claude Code (grid, tree, radial, kanban, flowchart, timeline, clustering)
+- ✅ **Board templates** - 6 template JSON files in `templates/` (mind-map, kanban, flowchart, swot, pros-cons, timeline)
+- **Semantic zoom** - Show node summaries when zoomed out
 
 ## Troubleshooting
 

@@ -1,0 +1,19 @@
+{
+  "nodes": [
+    {"id": "topic", "x": 100, "y": -100, "width": 250, "height": 80, "text": "Decision: [Topic]", "node_type": "idea"},
+
+    {"id": "pro-header", "x": -50, "y": 30, "width": 200, "height": 60, "text": "Pros", "node_type": "note", "color": "#22c55e"},
+    {"id": "p1", "x": -50, "y": 140, "width": 200, "height": 80, "text": "Pro 1", "node_type": "text", "color": "#22c55e", "group": "pros"},
+    {"id": "p2", "x": -50, "y": 270, "width": 200, "height": 80, "text": "Pro 2", "node_type": "text", "color": "#22c55e", "group": "pros"},
+    {"id": "p3", "x": -50, "y": 400, "width": 200, "height": 80, "text": "Pro 3", "node_type": "text", "color": "#22c55e", "group": "pros"},
+
+    {"id": "con-header", "x": 250, "y": 30, "width": 200, "height": 60, "text": "Cons", "node_type": "note", "color": "#ef4444"},
+    {"id": "c1", "x": 250, "y": 140, "width": 200, "height": 80, "text": "Con 1", "node_type": "text", "color": "#ef4444", "group": "cons"},
+    {"id": "c2", "x": 250, "y": 270, "width": 200, "height": 80, "text": "Con 2", "node_type": "text", "color": "#ef4444", "group": "cons"},
+    {"id": "c3", "x": 250, "y": 400, "width": 200, "height": 80, "text": "Con 3", "node_type": "text", "color": "#ef4444", "group": "cons"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "topic", "to_node": "pro-header"},
+    {"id": "e2", "from_node": "topic", "to_node": "con-header"}
+  ]
+}

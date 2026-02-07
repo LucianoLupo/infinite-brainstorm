@@ -1,0 +1,22 @@
+{
+  "nodes": [
+    {"id": "title", "x": 100, "y": -120, "width": 250, "height": 70, "text": "SWOT Analysis: [Topic]", "node_type": "idea"},
+
+    {"id": "s-header", "x": -125, "y": 0, "width": 200, "height": 60, "text": "Strengths", "node_type": "note", "color": "#22c55e"},
+    {"id": "s1", "x": -125, "y": 110, "width": 200, "height": 80, "text": "Strength 1", "node_type": "text", "group": "strengths", "color": "#22c55e"},
+    {"id": "s2", "x": -125, "y": 240, "width": 200, "height": 80, "text": "Strength 2", "node_type": "text", "group": "strengths", "color": "#22c55e"},
+
+    {"id": "w-header", "x": 125, "y": 0, "width": 200, "height": 60, "text": "Weaknesses", "node_type": "note", "color": "#ef4444"},
+    {"id": "w1", "x": 125, "y": 110, "width": 200, "height": 80, "text": "Weakness 1", "node_type": "text", "group": "weaknesses", "color": "#ef4444"},
+    {"id": "w2", "x": 125, "y": 240, "width": 200, "height": 80, "text": "Weakness 2", "node_type": "text", "group": "weaknesses", "color": "#ef4444"},
+
+    {"id": "o-header", "x": 375, "y": 0, "width": 200, "height": 60, "text": "Opportunities", "node_type": "note", "color": "#3b82f6"},
+    {"id": "o1", "x": 375, "y": 110, "width": 200, "height": 80, "text": "Opportunity 1", "node_type": "text", "group": "opportunities", "color": "#3b82f6"},
+    {"id": "o2", "x": 375, "y": 240, "width": 200, "height": 80, "text": "Opportunity 2", "node_type": "text", "group": "opportunities", "color": "#3b82f6"},
+
+    {"id": "t-header", "x": 625, "y": 0, "width": 200, "height": 60, "text": "Threats", "node_type": "note", "color": "#f59e0b"},
+    {"id": "t1", "x": 625, "y": 110, "width": 200, "height": 80, "text": "Threat 1", "node_type": "text", "group": "threats", "color": "#f59e0b"},
+    {"id": "t2", "x": 625, "y": 240, "width": 200, "height": 80, "text": "Threat 2", "node_type": "text", "group": "threats", "color": "#f59e0b"}
+  ],
+  "edges": []
+}

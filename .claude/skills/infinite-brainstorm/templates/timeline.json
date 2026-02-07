@@ -1,0 +1,20 @@
+{
+  "nodes": [
+    {"id": "title", "x": 250, "y": -100, "width": 300, "height": 70, "text": "Timeline: [Topic]", "node_type": "idea"},
+    {"id": "m1", "x": 0, "y": 30, "width": 200, "height": 100, "text": "Phase 1\nDescription", "node_type": "text", "status": "done", "color": "#22c55e"},
+    {"id": "m2", "x": 250, "y": 30, "width": 200, "height": 100, "text": "Phase 2\nDescription", "node_type": "text", "status": "in-progress", "color": "#3b82f6"},
+    {"id": "m3", "x": 500, "y": 30, "width": 200, "height": 100, "text": "Phase 3\nDescription", "node_type": "text", "status": "todo", "color": "#888888"},
+    {"id": "m4", "x": 750, "y": 30, "width": 200, "height": 100, "text": "Phase 4\nDescription", "node_type": "text", "status": "todo", "color": "#888888"},
+    {"id": "d1", "x": 0, "y": 180, "width": 200, "height": 80, "text": "Detail / milestone", "node_type": "note"},
+    {"id": "d2", "x": 250, "y": 180, "width": 200, "height": 80, "text": "Detail / milestone", "node_type": "note"},
+    {"id": "d3", "x": 500, "y": 180, "width": 200, "height": 80, "text": "Detail / milestone", "node_type": "note"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "m1", "to_node": "m2"},
+    {"id": "e2", "from_node": "m2", "to_node": "m3"},
+    {"id": "e3", "from_node": "m3", "to_node": "m4"},
+    {"id": "e4", "from_node": "m1", "to_node": "d1"},
+    {"id": "e5", "from_node": "m2", "to_node": "d2"},
+    {"id": "e6", "from_node": "m3", "to_node": "d3"}
+  ]
+}

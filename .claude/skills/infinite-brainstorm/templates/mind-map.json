@@ -1,0 +1,27 @@
+{
+  "nodes": [
+    {"id": "center", "x": 0, "y": 0, "width": 220, "height": 100, "text": "Central Topic", "node_type": "idea"},
+    {"id": "b1", "x": 350, "y": -200, "width": 200, "height": 100, "text": "Branch 1", "node_type": "text"},
+    {"id": "b2", "x": 350, "y": 0, "width": 200, "height": 100, "text": "Branch 2", "node_type": "text"},
+    {"id": "b3", "x": 350, "y": 200, "width": 200, "height": 100, "text": "Branch 3", "node_type": "text"},
+    {"id": "b4", "x": -350, "y": -200, "width": 200, "height": 100, "text": "Branch 4", "node_type": "text"},
+    {"id": "b5", "x": -350, "y": 0, "width": 200, "height": 100, "text": "Branch 5", "node_type": "text"},
+    {"id": "b6", "x": -350, "y": 200, "width": 200, "height": 100, "text": "Branch 6", "node_type": "text"},
+    {"id": "b1a", "x": 650, "y": -280, "width": 180, "height": 80, "text": "Sub-idea 1a", "node_type": "note"},
+    {"id": "b1b", "x": 650, "y": -170, "width": 180, "height": 80, "text": "Sub-idea 1b", "node_type": "note"},
+    {"id": "b2a", "x": 650, "y": -50, "width": 180, "height": 80, "text": "Sub-idea 2a", "node_type": "note"},
+    {"id": "b2b", "x": 650, "y": 50, "width": 180, "height": 80, "text": "Sub-idea 2b", "node_type": "note"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "center", "to_node": "b1"},
+    {"id": "e2", "from_node": "center", "to_node": "b2"},
+    {"id": "e3", "from_node": "center", "to_node": "b3"},
+    {"id": "e4", "from_node": "center", "to_node": "b4"},
+    {"id": "e5", "from_node": "center", "to_node": "b5"},
+    {"id": "e6", "from_node": "center", "to_node": "b6"},
+    {"id": "e7", "from_node": "b1", "to_node": "b1a"},
+    {"id": "e8", "from_node": "b1", "to_node": "b1b"},
+    {"id": "e9", "from_node": "b2", "to_node": "b2a"},
+    {"id": "e10", "from_node": "b2", "to_node": "b2b"}
+  ]
+}

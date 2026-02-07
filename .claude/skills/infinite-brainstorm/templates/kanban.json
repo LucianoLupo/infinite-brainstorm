@@ -1,0 +1,20 @@
+{
+  "nodes": [
+    {"id": "h-todo", "x": 0, "y": -80, "width": 200, "height": 60, "text": "To Do", "node_type": "note", "color": "#888888"},
+    {"id": "h-progress", "x": 250, "y": -80, "width": 200, "height": 60, "text": "In Progress", "node_type": "note", "color": "#3b82f6"},
+    {"id": "h-review", "x": 500, "y": -80, "width": 200, "height": 60, "text": "Review", "node_type": "note", "color": "#f59e0b"},
+    {"id": "h-done", "x": 750, "y": -80, "width": 200, "height": 60, "text": "Done", "node_type": "note", "color": "#22c55e"},
+
+    {"id": "t1", "x": 0, "y": 30, "width": 200, "height": 100, "text": "Task 1", "node_type": "text", "status": "todo", "priority": 1},
+    {"id": "t2", "x": 0, "y": 180, "width": 200, "height": 100, "text": "Task 2", "node_type": "text", "status": "todo", "priority": 2},
+    {"id": "t3", "x": 0, "y": 330, "width": 200, "height": 100, "text": "Task 3", "node_type": "text", "status": "todo", "priority": 3},
+
+    {"id": "t4", "x": 250, "y": 30, "width": 200, "height": 100, "text": "Task 4", "node_type": "idea", "status": "in-progress", "priority": 1},
+    {"id": "t5", "x": 250, "y": 180, "width": 200, "height": 100, "text": "Task 5", "node_type": "idea", "status": "in-progress", "priority": 2},
+
+    {"id": "t6", "x": 500, "y": 30, "width": 200, "height": 100, "text": "Task 6", "node_type": "text", "status": "review", "priority": 2},
+
+    {"id": "t7", "x": 750, "y": 30, "width": 200, "height": 100, "text": "Task 7", "node_type": "text", "status": "done", "priority": 3}
+  ],
+  "edges": []
+}

@@ -1,0 +1,20 @@
+{
+  "nodes": [
+    {"id": "start", "x": 0, "y": 0, "width": 200, "height": 80, "text": "Start", "node_type": "idea", "color": "#22c55e"},
+    {"id": "step1", "x": 0, "y": 150, "width": 200, "height": 100, "text": "Step 1", "node_type": "text"},
+    {"id": "decision", "x": 0, "y": 320, "width": 200, "height": 100, "text": "Decision?", "node_type": "note", "color": "#f59e0b"},
+    {"id": "yes-path", "x": -250, "y": 490, "width": 200, "height": 100, "text": "Yes path", "node_type": "text"},
+    {"id": "no-path", "x": 250, "y": 490, "width": 200, "height": 100, "text": "No path", "node_type": "text"},
+    {"id": "converge", "x": 0, "y": 660, "width": 200, "height": 100, "text": "Next step", "node_type": "text"},
+    {"id": "end", "x": 0, "y": 830, "width": 200, "height": 80, "text": "End", "node_type": "idea", "color": "#ef4444"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "start", "to_node": "step1"},
+    {"id": "e2", "from_node": "step1", "to_node": "decision"},
+    {"id": "e3", "from_node": "decision", "to_node": "yes-path"},
+    {"id": "e4", "from_node": "decision", "to_node": "no-path"},
+    {"id": "e5", "from_node": "yes-path", "to_node": "converge"},
+    {"id": "e6", "from_node": "no-path", "to_node": "converge"},
+    {"id": "e7", "from_node": "converge", "to_node": "end"}
+  ]
+}

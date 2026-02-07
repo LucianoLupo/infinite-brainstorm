@@ -385,32 +385,83 @@ fn draw_link_content(
     ctx.restore();
 }
 
+/// Find the point where a line from `from` toward the center of a rectangle
+/// intersects the rectangle boundary.
+fn clip_line_to_rect(
+    from_x: f64, from_y: f64,
+    rect_cx: f64, rect_cy: f64,
+    half_w: f64, half_h: f64,
+) -> (f64, f64) {
+    let dx = from_x - rect_cx;
+    let dy = from_y - rect_cy;
+
+    if dx.abs() < 1e-10 && dy.abs() < 1e-10 {
+        return (rect_cx, rect_cy);
+    }
+
+    let tx = if dx.abs() > 1e-10 { half_w / dx.abs() } else { f64::INFINITY };
+    let ty = if dy.abs() > 1e-10 { half_h / dy.abs() } else { f64::INFINITY };
+    let t = tx.min(ty);
+
+    (rect_cx + t * dx, rect_cy + t * dy)
+}
+
+/// Draw a filled arrowhead triangle at (tip_x, tip_y) pointing in the given angle.
+fn draw_arrowhead(ctx: &CanvasRenderingContext2d, tip_x: f64, tip_y: f64, angle: f64, size: f64) {
+    let spread = 0.4; // ~23 degrees
+
+    let x1 = tip_x - size * (angle - spread).cos();
+    let y1 = tip_y - size * (angle - spread).sin();
+    let x2 = tip_x - size * (angle + spread).cos();
+    let y2 = tip_y - size * (angle + spread).sin();
+
+    ctx.begin_path();
+    ctx.move_to(tip_x, tip_y);
+    ctx.line_to(x1, y1);
+    ctx.line_to(x2, y2);
+    ctx.close_path();
+    ctx.fill();
+}
+
 fn draw_edge(ctx: &CanvasRenderingContext2d, board: &Board, edge: &crate::state::Edge, camera: &Camera, is_selected: bool) {
     let from_node = board.nodes.iter().find(|n| n.id == edge.from_node);
     let to_node = board.nodes.iter().find(|n| n.id == edge.to_node);
 
     if let (Some(from), Some(to)) = (from_node, to_node) {
-        let from_center_x = from.x + from.width / 2.0;
-        let from_center_y = from.y + from.height / 2.0;
-        let to_center_x = to.x + to.width / 2.0;
-        let to_center_y = to.y + to.height / 2.0;
+        let from_cx = from.x + from.width / 2.0;
+        let from_cy = from.y + from.height / 2.0;
+        let to_cx = to.x + to.width / 2.0;
+        let to_cy = to.y + to.height / 2.0;
 
-        let (from_screen_x, from_screen_y) = camera.world_to_screen(from_center_x, from_center_y);
-        let (to_screen_x, to_screen_y) = camera.world_to_screen(to_center_x, to_center_y);
+        // Clip line to node boundaries (world coordinates)
+        let (from_bx, from_by) = clip_line_to_rect(to_cx, to_cy, from_cx, from_cy, from.width / 2.0, from.height / 2.0);
+        let (to_bx, to_by) = clip_line_to_rect(from_cx, from_cy, to_cx, to_cy, to.width / 2.0, to.height / 2.0);
+
+        let (from_sx, from_sy) = camera.world_to_screen(from_bx, from_by);
+        let (to_sx, to_sy) = camera.world_to_screen(to_bx, to_by);
+
+        let angle = (to_sy - from_sy).atan2(to_sx - from_sx);
+        let arrow_size = (10.0 * camera.zoom).clamp(5.0, 20.0);
 
         if is_selected {
             ctx.set_stroke_style_str(BORDER_SELECTED);
+            ctx.set_fill_style_str(BORDER_SELECTED);
             ctx.set_line_width(2.0);
             ctx.set_shadow_color(BORDER_SELECTED);
             ctx.set_shadow_blur(8.0);
         } else {
             ctx.set_stroke_style_str(EDGE_COLOR);
+            ctx.set_fill_style_str(EDGE_COLOR);
             ctx.set_line_width(1.0);
         }
+
         ctx.begin_path();
-        ctx.move_to(from_screen_x, from_screen_y);
-        ctx.line_to(to_screen_x, to_screen_y);
+        ctx.move_to(from_sx, from_sy);
+        ctx.line_to(to_sx, to_sy);
         ctx.stroke();
+
+        draw_arrowhead(ctx, to_sx, to_sy, angle, arrow_size);
+
         ctx.set_shadow_blur(0.0);
     }
 }
@@ -424,16 +475,26 @@ fn draw_edge_preview(
     camera: &Camera,
 ) {
     if let Some(from) = board.nodes.iter().find(|n| n.id == from_node_id) {
-        let from_center_x = from.x + from.width / 2.0;
-        let from_center_y = from.y + from.height / 2.0;
-        let (from_screen_x, from_screen_y) = camera.world_to_screen(from_center_x, from_center_y);
+        let from_cx = from.x + from.width / 2.0;
+        let from_cy = from.y + from.height / 2.0;
+
+        // Clip line start to source node boundary
+        let (to_wx, to_wy) = camera.screen_to_world(to_screen_x, to_screen_y);
+        let (from_bx, from_by) = clip_line_to_rect(to_wx, to_wy, from_cx, from_cy, from.width / 2.0, from.height / 2.0);
+        let (from_sx, from_sy) = camera.world_to_screen(from_bx, from_by);
+
+        let angle = (to_screen_y - from_sy).atan2(to_screen_x - from_sx);
+        let arrow_size = (10.0 * camera.zoom).clamp(5.0, 20.0);
 
         ctx.set_stroke_style_str(EDGE_PREVIEW);
+        ctx.set_fill_style_str(EDGE_PREVIEW);
         ctx.set_line_width(1.0);
         ctx.begin_path();
-        ctx.move_to(from_screen_x, from_screen_y);
+        ctx.move_to(from_sx, from_sy);
         ctx.line_to(to_screen_x, to_screen_y);
         ctx.stroke();
+
+        draw_arrowhead(ctx, to_screen_x, to_screen_y, angle, arrow_size);
     }
 }
 
@@ -576,4 +637,104 @@ pub fn get_canvas_context(
         .get_context("2d")?
         .ok_or_else(|| JsValue::from_str("Failed to get 2d context"))?
         .dyn_into::<CanvasRenderingContext2d>()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod clip_line_to_rect_tests {
+        use super::*;
+
+        // Rectangle centered at (100, 100), 200x100 → half_w=100, half_h=50
+
+        #[test]
+        fn from_right() {
+            let (x, y) = clip_line_to_rect(300.0, 100.0, 100.0, 100.0, 100.0, 50.0);
+            assert!((x - 200.0).abs() < 1e-10);
+            assert!((y - 100.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn from_left() {
+            let (x, y) = clip_line_to_rect(-100.0, 100.0, 100.0, 100.0, 100.0, 50.0);
+            assert!((x - 0.0).abs() < 1e-10);
+            assert!((y - 100.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn from_above() {
+            let (x, y) = clip_line_to_rect(100.0, -100.0, 100.0, 100.0, 100.0, 50.0);
+            assert!((x - 100.0).abs() < 1e-10);
+            assert!((y - 50.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn from_below() {
+            let (x, y) = clip_line_to_rect(100.0, 300.0, 100.0, 100.0, 100.0, 50.0);
+            assert!((x - 100.0).abs() < 1e-10);
+            assert!((y - 150.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn from_diagonal_hits_right_edge() {
+            // From (400, 100) to rect center (100, 100) — horizontal, hits right edge
+            let (x, y) = clip_line_to_rect(400.0, 100.0, 100.0, 100.0, 100.0, 50.0);
+            assert!((x - 200.0).abs() < 1e-10);
+            assert!((y - 100.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn from_diagonal_hits_top_edge() {
+            // From (100, -200) — steep vertical approach, should hit top edge
+            let (x, y) = clip_line_to_rect(100.0, -200.0, 100.0, 100.0, 100.0, 50.0);
+            assert!((x - 100.0).abs() < 1e-10);
+            assert!((y - 50.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn from_45_degrees_wide_rect() {
+            // Rect is wider than tall (100x50 half-dims), 45-degree approach from top-right
+            // From (300, 0) to center (100, 100): dx=200, dy=-100
+            // tx = 100/200 = 0.5, ty = 50/100 = 0.5 → corner hit
+            let (x, y) = clip_line_to_rect(300.0, 0.0, 100.0, 100.0, 100.0, 50.0);
+            assert!((x - 200.0).abs() < 1e-10);
+            assert!((y - 50.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn degenerate_same_point() {
+            let (x, y) = clip_line_to_rect(100.0, 100.0, 100.0, 100.0, 100.0, 50.0);
+            assert!((x - 100.0).abs() < 1e-10);
+            assert!((y - 100.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn square_rect_from_diagonal() {
+            // Square: center (0,0), half=50. From (100, 100): 45 degrees
+            // dx=100, dy=100. tx=50/100=0.5, ty=50/100=0.5 → corner
+            let (x, y) = clip_line_to_rect(100.0, 100.0, 0.0, 0.0, 50.0, 50.0);
+            assert!((x - 50.0).abs() < 1e-10);
+            assert!((y - 50.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn negative_coordinates() {
+            // Rect at (-200, -200), half=100x50. From (0, -200) — approaches from right
+            let (x, y) = clip_line_to_rect(0.0, -200.0, -200.0, -200.0, 100.0, 50.0);
+            assert!((x - -100.0).abs() < 1e-10);
+            assert!((y - -200.0).abs() < 1e-10);
+        }
+
+        #[test]
+        fn symmetry_left_right() {
+            // Approaching from left and right should give opposite boundary points
+            let (lx, ly) = clip_line_to_rect(-500.0, 0.0, 0.0, 0.0, 100.0, 50.0);
+            let (rx, ry) = clip_line_to_rect(500.0, 0.0, 0.0, 0.0, 100.0, 50.0);
+            assert!((lx - -100.0).abs() < 1e-10);
+            assert!((rx - 100.0).abs() < 1e-10);
+            assert!((ly - 0.0).abs() < 1e-10);
+            assert!((ry - 0.0).abs() < 1e-10);
+        }
+    }
 }

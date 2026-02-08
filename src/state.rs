@@ -23,7 +23,9 @@ pub struct Node {
     pub id: String,
     pub x: f64,
     pub y: f64,
+    #[serde(default)]
     pub width: f64,
+    #[serde(default)]
     pub height: f64,
     pub text: String,
     #[serde(default = "default_node_type")]
@@ -66,6 +68,22 @@ impl Node {
         px >= self.x && px <= self.x + self.width && py >= self.y && py <= self.y + self.height
     }
 
+    pub fn auto_size(text: &str) -> (f64, f64) {
+        let char_count = text.len().min(30);
+        let width = ((char_count * 9 + 40) as f64).clamp(150.0, 400.0);
+
+        let newline_count = text.chars().filter(|c| *c == '\n').count();
+        let wrap_lines = if char_count > 0 {
+            (text.len() as f64 / 30.0).ceil() as usize
+        } else {
+            1
+        };
+        let lines = newline_count.max(wrap_lines).max(1);
+        let height = ((lines * 18 + 50) as f64).clamp(60.0, 500.0);
+
+        (width, height)
+    }
+
     pub fn resize_handle_at(&self, px: f64, py: f64, handle_size: f64) -> Option<ResizeHandle> {
         let half = handle_size / 2.0;
 
@@ -106,6 +124,8 @@ pub struct Edge {
     pub id: String,
     pub from_node: String,
     pub to_node: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -333,6 +353,35 @@ mod tests {
             // Edge but not corner
             assert_eq!(node.resize_handle_at(200.0, 100.0, handle_size), None);
         }
+
+        #[test]
+        fn auto_size_short_text() {
+            let (w, h) = Node::auto_size("Hello");
+            assert!(w >= 150.0);
+            assert!(h >= 60.0);
+        }
+
+        #[test]
+        fn auto_size_long_text() {
+            let text = "This is a long piece of text that should make the node wider than the minimum";
+            let (w, h) = Node::auto_size(text);
+            assert!(w >= 150.0 && w <= 400.0);
+            assert!(h >= 60.0);
+        }
+
+        #[test]
+        fn auto_size_multiline_text() {
+            let text = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
+            let (_w, h) = Node::auto_size(text);
+            assert!(h > 60.0);
+        }
+
+        #[test]
+        fn auto_size_empty_text() {
+            let (w, h) = Node::auto_size("");
+            assert_eq!(w, 150.0); // min clamp
+            assert_eq!(h, 68.0); // 1 line * 18 + 50 = 68
+        }
     }
 
     mod board_tests {
@@ -369,6 +418,7 @@ mod tests {
                     id: "e1".to_string(),
                     from_node: "n1".to_string(),
                     to_node: "n2".to_string(),
+                    label: None,
                 }],
             };
 
@@ -394,6 +444,21 @@ mod tests {
 
             let board: Board = serde_json::from_str(json).unwrap();
             assert_eq!(board.nodes[0].node_type, "text");
+        }
+
+        #[test]
+        fn deserialize_node_without_width_height() {
+            let json = r#"{
+                "nodes": [{
+                    "id": "n1",
+                    "x": 100, "y": 200,
+                    "text": "Agent-created node", "node_type": "idea"
+                }],
+                "edges": []
+            }"#;
+            let board: Board = serde_json::from_str(json).unwrap();
+            assert_eq!(board.nodes[0].width, 0.0);
+            assert_eq!(board.nodes[0].height, 0.0);
         }
 
         #[test]
@@ -468,12 +533,46 @@ mod tests {
                 id: "e1".to_string(),
                 from_node: "a".to_string(),
                 to_node: "b".to_string(),
+                label: None,
             };
 
             let json = serde_json::to_string(&edge).unwrap();
             let deserialized: Edge = serde_json::from_str(&json).unwrap();
 
             assert_eq!(edge, deserialized);
+        }
+
+        #[test]
+        fn serde_round_trip_with_label() {
+            let edge = Edge {
+                id: "e1".to_string(),
+                from_node: "a".to_string(),
+                to_node: "b".to_string(),
+                label: Some("depends on".to_string()),
+            };
+            let json = serde_json::to_string(&edge).unwrap();
+            assert!(json.contains("\"label\":\"depends on\""));
+            let deserialized: Edge = serde_json::from_str(&json).unwrap();
+            assert_eq!(edge, deserialized);
+        }
+
+        #[test]
+        fn skip_serializing_none_label() {
+            let edge = Edge {
+                id: "e1".to_string(),
+                from_node: "a".to_string(),
+                to_node: "b".to_string(),
+                label: None,
+            };
+            let json = serde_json::to_string(&edge).unwrap();
+            assert!(!json.contains("label"));
+        }
+
+        #[test]
+        fn deserialize_old_edge_without_label() {
+            let json = r#"{"id":"e1","from_node":"a","to_node":"b"}"#;
+            let edge: Edge = serde_json::from_str(json).unwrap();
+            assert_eq!(edge.label, None);
         }
     }
 
@@ -639,6 +738,7 @@ mod tests {
                     id: format!("e{}", i),
                     from_node: format!("n{}", i),
                     to_node: format!("n{}", i + 1),
+                    label: None,
                 })
                 .collect();
 
@@ -666,6 +766,7 @@ mod tests {
                         id: format!("e{}", edge_id),
                         from_node: format!("n{}", i),
                         to_node: format!("n{}", j),
+                        label: None,
                     });
                     edge_id += 1;
                 }

@@ -45,6 +45,10 @@ brainstorm /path/to/project
 
 **Edge:** `{"id": "uuid", "from_node": "node-id-1", "to_node": "node-id-2"}`
 
+**Edge with label:** `{"id": "uuid", "from_node": "node-id-1", "to_node": "node-id-2", "label": "depends on"}`
+
+**Auto-sized node (agent shorthand):** `{"id": "uuid", "x": 0, "y": 0, "text": "Hello", "node_type": "text"}` — width/height default to 0, app auto-sizes on load.
+
 ## Common Claude Code Operations
 
 ### Read the current board state
@@ -251,10 +255,35 @@ infinite-brainstorm/
     {
       "id": "edge-uuid",
       "from_node": "source-node-id",
-      "to_node": "target-node-id"
+      "to_node": "target-node-id",
+      "label": "depends on"
     }
   ]
 }
+```
+
+### Node Auto-size
+
+`width` and `height` default to `0` when omitted from JSON. On load, the app auto-sizes any node with `width == 0 || height == 0` based on text content. The computed dimensions persist on next save. This means agents can create nodes without specifying dimensions:
+
+```json
+{"id": "uuid", "x": 0, "y": 0, "text": "Just the text", "node_type": "idea"}
+```
+
+### Edge Labels (optional)
+
+Edges support an optional `label` field rendered at the midpoint of the edge line. Useful for expressing relationship types (e.g., "depends on", "blocks", "related to"):
+
+```json
+{"id": "uuid", "from_node": "n1", "to_node": "n2", "label": "blocks"}
+```
+
+### Group Containers
+
+Nodes sharing the same `group` value are visually enclosed in a translucent bounding box with the group name as a label. No extra schema — just set the existing `group` field on nodes:
+
+```json
+{"id": "n1", "x": 0, "y": 0, "width": 200, "height": 100, "text": "Task A", "node_type": "text", "group": "sprint-1"}
 ```
 
 ### Node Metadata (optional)
@@ -379,6 +408,9 @@ jq '.nodes[] | select(.group == "cluster-a") | .color = "#ff6600"' board.json
 **Agent-Native Features:**
 - ✅ **Node metadata** - Optional `color`, `tags`, `status`, `group`, `priority` fields for agent categorization
 - ✅ **Directed edges** - Arrows with arrowheads, lines clip to node borders
+- ✅ **Edge labels** - Optional `label` field on edges, rendered at midpoint with background pill
+- ✅ **Group containers** - Nodes with same `group` value get a visual bounding box
+- ✅ **Node auto-size** - Agents can omit `width`/`height`; app auto-sizes on load based on text content
 - ✅ **Auto-layout algorithms** - Layout math documented in skill for Claude Code (grid, tree, radial, kanban, flowchart, timeline, clustering)
 - ✅ **Board templates** - 6 template JSON files in `templates/` (mind-map, kanban, flowchart, swot, pros-cons, timeline)
 - **Semantic zoom** - Show node summaries when zoomed out

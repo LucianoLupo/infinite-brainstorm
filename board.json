@@ -27,7 +27,8 @@
       "width": 160.0,
       "height": 60.0,
       "text": "app.rs\nEvent handlers",
-      "node_type": "text"
+      "node_type": "text",
+      "group": "frontend-modules"
     },
     {
       "id": "fe-canvas",
@@ -36,7 +37,8 @@
       "width": 160.0,
       "height": 60.0,
       "text": "canvas.rs\nRendering",
-      "node_type": "text"
+      "node_type": "text",
+      "group": "frontend-modules"
     },
     {
       "id": "fe-state",
@@ -45,7 +47,8 @@
       "width": 160.0,
       "height": 60.0,
       "text": "state.rs\nData types",
-      "node_type": "text"
+      "node_type": "text",
+      "group": "frontend-modules"
     },
     {
       "id": "backend",
@@ -166,8 +169,8 @@
     },
     {
       "id": "features",
-      "x": 619.1017682605842,
-      "y": 152.50996155928226,
+      "x": 880.7292380849037,
+      "y": 135.59796824093095,
       "width": 160.0,
       "height": 70.0,
       "text": "Key Features",
@@ -175,8 +178,8 @@
     },
     {
       "id": "feat-sync",
-      "x": 269.713188298911,
-      "y": 159.74755131540937,
+      "x": 517.1756399675842,
+      "y": 155.53206479356527,
       "width": 160.0,
       "height": 50.0,
       "text": "Real-time sync",
@@ -186,8 +189,8 @@
     },
     {
       "id": "feat-agent",
-      "x": 961.7950742902784,
-      "y": 270.7004760811692,
+      "x": 1302.9182537870229,
+      "y": 211.6834998726876,
       "width": 160.0,
       "height": 50.0,
       "text": "Agent-native",
@@ -197,8 +200,8 @@
     },
     {
       "id": "future-ideas",
-      "x": 536.260346727888,
-      "y": 409.9097881929294,
+      "x": 796.6758777770391,
+      "y": 377.79536146697893,
       "width": 160.0,
       "height": 60.0,
       "text": "Future Ideas",
@@ -206,8 +209,8 @@
     },
     {
       "id": "future-md-links",
-      "x": 191.5818667682464,
-      "y": 434.24258130040465,
+      "x": 384.91394485498824,
+      "y": 572.7201186806037,
       "width": 273.0,
       "height": 145.0,
       "text": "Local .md links → render as md\n✓ Shipped in v1",
@@ -220,8 +223,8 @@
     },
     {
       "id": "future-undo",
-      "x": 755.9948349992352,
-      "y": 590.6690655899819,
+      "x": 1022.0561584352436,
+      "y": 681.496407741351,
       "width": 140.0,
       "height": 50.0,
       "text": "Undo/Redo ✓",
@@ -233,8 +236,8 @@
     },
     {
       "id": "future-crdt",
-      "x": 519.6918203853413,
-      "y": 650.375107770995,
+      "x": 751.8964261587602,
+      "y": 820.20145780174,
       "width": 160.0,
       "height": 50.0,
       "text": "Loro CRDT collab\n(not yet implemented)",
@@ -440,7 +443,7 @@
     {
       "id": "link-obsidian-research",
       "x": 1679.2845180205409,
-      "y": -495.1151267391345,
+      "y": -495.55966596175506,
       "width": 280.0,
       "height": 120.0,
       "text": "file:///Users/lucianolupo/Documents/Obsidian%20Vault/30_Resources/AI%20Engineering/Rust%20WASM%20Canvas%20App%20-%20Research.md",
@@ -538,8 +541,8 @@
     },
     {
       "id": "arch-state-detail",
-      "x": 1211.0960496670957,
-      "y": 1068.5153529078211,
+      "x": 1301.0905262611311,
+      "y": 1121.0121309210083,
       "width": 200.0,
       "height": 70.0,
       "text": "state.rs Data Types",
@@ -547,8 +550,8 @@
     },
     {
       "id": "state-board",
-      "x": 1030.7571725077555,
-      "y": 1167.7157278945735,
+      "x": 1120.7516491017911,
+      "y": 1220.212505907761,
       "width": 180.0,
       "height": 80.0,
       "text": "Board {\n  nodes: Vec<Node>\n  edges: Vec<Edge>\n}",
@@ -556,8 +559,8 @@
     },
     {
       "id": "state-node",
-      "x": 1361.0960496670957,
-      "y": 1168.5153529078211,
+      "x": 1451.0905262611311,
+      "y": 1221.0121309210083,
       "width": 180.0,
       "height": 100.0,
       "text": "Node {\n  id, x, y\n  width, height\n  text, node_type\n  color?, tags[]\n  status?, group?\n  priority?\n}",
@@ -565,8 +568,8 @@
     },
     {
       "id": "state-camera",
-      "x": 1086.7309234350794,
-      "y": 1303.3037283184924,
+      "x": 1176.725400029115,
+      "y": 1355.8005063316798,
       "width": 180.0,
       "height": 100.0,
       "text": "Camera {\n  x, y, zoom\n}\n+ screen_to_world()\n+ world_to_screen()",
@@ -574,17 +577,17 @@
     },
     {
       "id": "state-edge",
-      "x": 1361.0960496670957,
-      "y": 1350.4816041000947,
+      "x": 1451.0905262611311,
+      "y": 1402.978382113282,
       "width": 180.0,
       "height": 70.0,
-      "text": "Edge {\n  id, from_node, to_node\n}",
+      "text": "Edge {\n  id, from_node, to_node\n  label?\n}",
       "node_type": "text"
     },
     {
       "id": "arch-backend-detail",
-      "x": 1885.0920353583624,
-      "y": 923.894683857697,
+      "x": 1911.340424364956,
+      "y": 946.393303006206,
       "width": 200.0,
       "height": 70.0,
       "text": "lib.rs Backend",
@@ -592,8 +595,8 @@
     },
     {
       "id": "be-commands",
-      "x": 1790.313034616503,
-      "y": 1116.6511853944053,
+      "x": 1816.5614236230967,
+      "y": 1139.149804542914,
       "width": 200.0,
       "height": 130.0,
       "text": "Tauri Commands (8)\n• load/save_board\n• get_board_path_cmd\n• fetch_link_preview\n• paste_image\n• read_image_base64\n• read_markdown_file\n• delete_asset",
@@ -601,8 +604,8 @@
     },
     {
       "id": "be-watcher-detail",
-      "x": 2163.84103716002,
-      "y": 1015.8984337252226,
+      "x": 2190.0894261666135,
+      "y": 1038.3970528737316,
       "width": 220.0,
       "height": 100.0,
       "text": "File Watcher\nnotify crate\n• 500ms poll interval\n• 100ms debounce\n• Emits \"board-changed\"",
@@ -610,8 +613,8 @@
     },
     {
       "id": "be-link-preview",
-      "x": 2053.0414121467725,
-      "y": 1209.8684347850217,
+      "x": 2079.289801153366,
+      "y": 1232.3670539335303,
       "width": 220.0,
       "height": 100.0,
       "text": "fetch_link_preview()\nreqwest + scraper\n• og:title, og:image\n• og:description\n• Fallback to <title>",
@@ -682,8 +685,8 @@
     },
     {
       "id": "arch-coords",
-      "x": 950.6825443986484,
-      "y": 1563.2798020212538,
+      "x": 975.0560484761996,
+      "y": 1555.780262305084,
       "width": 200.0,
       "height": 70.0,
       "text": "Coordinate System",
@@ -718,8 +721,8 @@
     },
     {
       "id": "link-obsidian-test",
-      "x": 2037.4711186821944,
-      "y": -201.73157790160775,
+      "x": 4458.98666601786,
+      "y": -150.38247589337377,
       "width": 583.781315675164,
       "height": 313.8695382108994,
       "text": "~/Documents/Obsidian Vault/00_Inbox/Agent-Native Security Tools in Rust.md",
@@ -727,8 +730,8 @@
     },
     {
       "id": "link-obsidian-encoded",
-      "x": 1621.2424330115216,
-      "y": 348.8819772099199,
+      "x": 4456.253380729282,
+      "y": 329.96388699636003,
       "width": 582.5487403366535,
       "height": 457.76562362273035,
       "text": "file:///Users/lucianolupo/Documents/Obsidian%20Vault/00_Inbox/2026-01-10-karpathy-behind-new-skill-tree.md",
@@ -736,8 +739,8 @@
     },
     {
       "id": "feat-metadata",
-      "x": 936.2355152120438,
-      "y": 153.3713920993601,
+      "x": 1225.5463771868765,
+      "y": 111.29305815765736,
       "width": 180.0,
       "height": 60.0,
       "text": "Node Metadatacolor, tags, status, group, priority",
@@ -752,8 +755,8 @@
     },
     {
       "id": "feat-image",
-      "x": 218.3830933967631,
-      "y": 220.69711367948804,
+      "x": 511.67951825789663,
+      "y": 243.38417664017507,
       "width": 160.0,
       "height": 50.0,
       "text": "Image nodes + paste",
@@ -763,8 +766,8 @@
     },
     {
       "id": "feat-resize",
-      "x": 290.2928870286788,
-      "y": 292.1353095521264,
+      "x": 568.643451066184,
+      "y": 317.8115446775391,
       "width": 160.0,
       "height": 50.0,
       "text": "Node resizing",
@@ -774,8 +777,8 @@
     },
     {
       "id": "feat-edges",
-      "x": 840.0,
-      "y": 370.0,
+      "x": 1370.1991565763524,
+      "y": 340.46119111851567,
       "width": 160.0,
       "height": 50.0,
       "text": "Edges + multi-select",
@@ -785,8 +788,8 @@
     },
     {
       "id": "future-multiboard",
-      "x": 380.0,
-      "y": 650.0,
+      "x": 569.5702205686763,
+      "y": 758.3826772356749,
       "width": 160.0,
       "height": 50.0,
       "text": "Multi-board switcher",
@@ -799,8 +802,8 @@
     },
     {
       "id": "future-semantic-zoom",
-      "x": 710.0,
-      "y": 710.0,
+      "x": 933.426938231266,
+      "y": 783.2720070670633,
       "width": 180.0,
       "height": 50.0,
       "text": "Semantic zoom (summaries)",
@@ -810,23 +813,330 @@
       ],
       "status": "todo",
       "priority": 5
+    },
+    {
+      "id": "feat-edge-labels",
+      "x": 1188.5312101914317,
+      "y": 413.4142704989936,
+      "width": 160.0,
+      "height": 50.0,
+      "text": "Edge labels",
+      "node_type": "note",
+      "tags": [
+        "shipped",
+        "v1.2"
+      ],
+      "status": "done",
+      "group": "core-features"
+    },
+    {
+      "id": "feat-groups",
+      "x": 1118.7838596811655,
+      "y": 500.3529127657724,
+      "width": 160.0,
+      "height": 50.0,
+      "text": "Group containers",
+      "node_type": "note",
+      "tags": [
+        "shipped",
+        "v1.2"
+      ],
+      "status": "done",
+      "group": "core-features"
+    },
+    {
+      "id": "feat-autosize",
+      "x": 1371.5203823561574,
+      "y": 410.4250983342679,
+      "width": 166.0,
+      "height": 68.0,
+      "text": "Node auto-size",
+      "node_type": "note",
+      "tags": [
+        "shipped",
+        "v1.2"
+      ],
+      "status": "done",
+      "group": "core-features"
+    },
+    {
+      "id": "showcase-labels-hub",
+      "x": 3092.9130875648116,
+      "y": -979.084291483214,
+      "width": 240.0,
+      "height": 80.0,
+      "text": "Feature Showcase:\nEdge Labels",
+      "node_type": "idea",
+      "color": "#ff8800",
+      "group": "showcase-edge-labels",
+      "priority": 1
+    },
+    {
+      "id": "sl-user",
+      "x": 2788.051953668847,
+      "y": -1040.5419754482152,
+      "width": 150.0,
+      "height": 60.0,
+      "text": "User",
+      "node_type": "text",
+      "group": "showcase-edge-labels"
+    },
+    {
+      "id": "sl-auth",
+      "x": 2947.310787610836,
+      "y": -1183.945425379179,
+      "width": 150.0,
+      "height": 60.0,
+      "text": "Auth Service",
+      "node_type": "text",
+      "group": "showcase-edge-labels"
+    },
+    {
+      "id": "sl-api",
+      "x": 3268.607418084988,
+      "y": -1215.5427957029503,
+      "width": 150.0,
+      "height": 60.0,
+      "text": "API Gateway",
+      "node_type": "text",
+      "group": "showcase-edge-labels"
+    },
+    {
+      "id": "sl-db",
+      "x": 2946.964032478116,
+      "y": -1324.223157587249,
+      "width": 150.0,
+      "height": 60.0,
+      "text": "Database",
+      "node_type": "note",
+      "group": "showcase-edge-labels"
+    },
+    {
+      "id": "sl-cache",
+      "x": 3433.307498490103,
+      "y": -1081.9766517716664,
+      "width": 150.0,
+      "height": 60.0,
+      "text": "Redis Cache",
+      "node_type": "note",
+      "group": "showcase-edge-labels"
+    },
+    {
+      "id": "sl-queue",
+      "x": 3452.4036384317706,
+      "y": -1311.955284639587,
+      "width": 150.0,
+      "height": 60.0,
+      "text": "Job Queue",
+      "node_type": "note",
+      "group": "showcase-edge-labels"
+    },
+    {
+      "id": "showcase-groups-hub",
+      "x": 3357.367878840726,
+      "y": -585.4468050307846,
+      "width": 240.0,
+      "height": 80.0,
+      "text": "Feature Showcase:\nGroup Containers",
+      "node_type": "idea",
+      "color": "#ff8800",
+      "priority": 1
+    },
+    {
+      "id": "sg-fe1",
+      "x": 2986.540872198522,
+      "y": -381.78998181699313,
+      "width": 140.0,
+      "height": 55.0,
+      "text": "React App",
+      "node_type": "text",
+      "group": "sg-frontend"
+    },
+    {
+      "id": "sg-fe2",
+      "x": 3146.540872198522,
+      "y": -381.78998181699313,
+      "width": 140.0,
+      "height": 55.0,
+      "text": "Components",
+      "node_type": "text",
+      "group": "sg-frontend"
+    },
+    {
+      "id": "sg-fe3",
+      "x": 2987.9097601713884,
+      "y": -294.0047232004453,
+      "width": 140.0,
+      "height": 55.0,
+      "text": "Styles / CSS",
+      "node_type": "text",
+      "group": "sg-frontend"
+    },
+    {
+      "id": "sg-be1",
+      "x": 3397.977747501145,
+      "y": -225.64227846519907,
+      "width": 140.0,
+      "height": 55.0,
+      "text": "API Server",
+      "node_type": "note",
+      "group": "sg-backend"
+    },
+    {
+      "id": "sg-be2",
+      "x": 3557.977747501145,
+      "y": -225.64227846519907,
+      "width": 140.0,
+      "height": 55.0,
+      "text": "Controllers",
+      "node_type": "note",
+      "group": "sg-backend"
+    },
+    {
+      "id": "sg-be3",
+      "x": 3477.977747501145,
+      "y": -145.64227846519904,
+      "width": 140.0,
+      "height": 55.0,
+      "text": "Models",
+      "node_type": "note",
+      "group": "sg-backend"
+    },
+    {
+      "id": "sg-infra1",
+      "x": 3793.0114112756105,
+      "y": -421.0522697405496,
+      "width": 140.0,
+      "height": 55.0,
+      "text": "Docker",
+      "node_type": "text",
+      "color": "#8866ff",
+      "group": "sg-infra"
+    },
+    {
+      "id": "sg-infra2",
+      "x": 3953.011411275611,
+      "y": -421.0522697405496,
+      "width": 140.0,
+      "height": 55.0,
+      "text": "CI/CD",
+      "node_type": "text",
+      "color": "#8866ff",
+      "group": "sg-infra"
+    },
+    {
+      "id": "sg-infra3",
+      "x": 3873.0114112756105,
+      "y": -341.05226974054966,
+      "width": 140.0,
+      "height": 55.0,
+      "text": "Monitoring",
+      "node_type": "text",
+      "color": "#8866ff",
+      "group": "sg-infra"
+    },
+    {
+      "id": "showcase-autosize-hub",
+      "x": 3430.3081422996524,
+      "y": 243.07139261366916,
+      "width": 240.0,
+      "height": 80.0,
+      "text": "Feature Showcase:\nNode Auto-size",
+      "node_type": "idea",
+      "color": "#ff8800",
+      "priority": 1
+    },
+    {
+      "id": "sa-short",
+      "x": 3103.83826300339,
+      "y": 420.56147017461103,
+      "width": 150.0,
+      "height": 68.0,
+      "text": "Short text",
+      "node_type": "text",
+      "tags": [
+        "auto-sized"
+      ]
+    },
+    {
+      "id": "sa-medium",
+      "x": 3304.20077522063,
+      "y": 424.4227382556939,
+      "width": 310.0,
+      "height": 104.0,
+      "text": "A node with a medium-length description that wraps across lines",
+      "node_type": "idea",
+      "tags": [
+        "auto-sized"
+      ]
+    },
+    {
+      "id": "sa-long",
+      "x": 3765.4851050567063,
+      "y": 374.7587339401572,
+      "width": 310.0,
+      "height": 176.0,
+      "text": "This node has a much longer text content to demonstrate how the auto-size feature handles larger blocks of text.\nIt even has line breaks!\nThe app calculates width and height automatically.",
+      "node_type": "note",
+      "tags": [
+        "auto-sized"
+      ]
+    },
+    {
+      "id": "sa-tiny",
+      "x": 3102.5634623247993,
+      "y": 523.0713926136692,
+      "width": 150.0,
+      "height": 68.0,
+      "text": "Hi",
+      "node_type": "text",
+      "tags": [
+        "auto-sized"
+      ]
+    },
+    {
+      "id": "sa-fixed",
+      "x": 3412.197880568098,
+      "y": 567.6521592327113,
+      "width": 200.0,
+      "height": 100.0,
+      "text": "This node has explicit\nwidth: 200, height: 100\n(not auto-sized)",
+      "node_type": "text",
+      "tags": [
+        "fixed-size"
+      ]
+    },
+    {
+      "id": "sa-emoji",
+      "x": 3766.568782733691,
+      "y": 593.8363737244654,
+      "width": 310.0,
+      "height": 122.0,
+      "text": "Auto-sized nodes let agents create content\nwithout guessing pixel dimensions.\nJust set width/height to 0 or omit them!",
+      "node_type": "md",
+      "tags": [
+        "auto-sized"
+      ]
     }
   ],
   "edges": [
     {
       "id": "e1",
       "from_node": "root",
-      "to_node": "frontend"
+      "to_node": "frontend",
+      "label": "contains"
     },
     {
       "id": "e2",
       "from_node": "root",
-      "to_node": "backend"
+      "to_node": "backend",
+      "label": "contains"
     },
     {
       "id": "e3",
       "from_node": "root",
-      "to_node": "data"
+      "to_node": "data",
+      "label": "stores in"
     },
     {
       "id": "e4",
@@ -851,7 +1161,8 @@
     {
       "id": "e8",
       "from_node": "be-lib",
-      "to_node": "be-watcher"
+      "to_node": "be-watcher",
+      "label": "spawns"
     },
     {
       "id": "e10",
@@ -901,7 +1212,8 @@
     {
       "id": "e16",
       "from_node": "root",
-      "to_node": "features"
+      "to_node": "features",
+      "label": "has"
     },
     {
       "id": "e17",
@@ -966,7 +1278,8 @@
     {
       "id": "e30",
       "from_node": "root",
-      "to_node": "research-hub"
+      "to_node": "research-hub",
+      "label": "inspired by"
     },
     {
       "id": "e31",
@@ -1046,7 +1359,8 @@
     {
       "id": "e50",
       "from_node": "data",
-      "to_node": "arch-deep"
+      "to_node": "arch-deep",
+      "label": "see also"
     },
     {
       "id": "e51",
@@ -1227,6 +1541,122 @@
       "id": "e-future-semzoom",
       "from_node": "future-ideas",
       "to_node": "future-semantic-zoom"
+    },
+    {
+      "id": "e-feat-labels",
+      "from_node": "features",
+      "to_node": "feat-edge-labels",
+      "label": "new!"
+    },
+    {
+      "id": "e-feat-groups",
+      "from_node": "features",
+      "to_node": "feat-groups",
+      "label": "new!"
+    },
+    {
+      "id": "e-feat-autosize",
+      "from_node": "features",
+      "to_node": "feat-autosize",
+      "label": "new!"
+    },
+    {
+      "id": "sl-e1",
+      "from_node": "sl-user",
+      "to_node": "sl-auth",
+      "label": "authenticates via"
+    },
+    {
+      "id": "sl-e2",
+      "from_node": "sl-auth",
+      "to_node": "sl-api",
+      "label": "issues token"
+    },
+    {
+      "id": "sl-e3",
+      "from_node": "sl-auth",
+      "to_node": "sl-db",
+      "label": "reads credentials"
+    },
+    {
+      "id": "sl-e4",
+      "from_node": "sl-api",
+      "to_node": "sl-cache",
+      "label": "caches sessions"
+    },
+    {
+      "id": "sl-e5",
+      "from_node": "sl-api",
+      "to_node": "sl-db",
+      "label": "queries"
+    },
+    {
+      "id": "sl-e6",
+      "from_node": "sl-api",
+      "to_node": "sl-queue",
+      "label": "enqueues jobs"
+    },
+    {
+      "id": "sl-e7",
+      "from_node": "sl-queue",
+      "to_node": "sl-db",
+      "label": "writes results"
+    },
+    {
+      "id": "sl-e8",
+      "from_node": "showcase-labels-hub",
+      "to_node": "sl-user"
+    },
+    {
+      "id": "sg-e1",
+      "from_node": "showcase-groups-hub",
+      "to_node": "sg-fe1"
+    },
+    {
+      "id": "sg-e2",
+      "from_node": "showcase-groups-hub",
+      "to_node": "sg-be1"
+    },
+    {
+      "id": "sg-e3",
+      "from_node": "showcase-groups-hub",
+      "to_node": "sg-infra1"
+    },
+    {
+      "id": "sg-e4",
+      "from_node": "sg-fe1",
+      "to_node": "sg-be1",
+      "label": "calls"
+    },
+    {
+      "id": "sg-e5",
+      "from_node": "sg-be1",
+      "to_node": "sg-infra1",
+      "label": "deploys to"
+    },
+    {
+      "id": "sa-e1",
+      "from_node": "showcase-autosize-hub",
+      "to_node": "sa-short",
+      "label": "tiny text"
+    },
+    {
+      "id": "sa-e2",
+      "from_node": "showcase-autosize-hub",
+      "to_node": "sa-medium",
+      "label": "medium text"
+    },
+    {
+      "id": "sa-e3",
+      "from_node": "showcase-autosize-hub",
+      "to_node": "sa-long",
+      "label": "long text"
+    },
+    {
+      "id": "sa-e4",
+      "from_node": "showcase-autosize-hub",
+      "to_node": "sa-fixed",
+      "label": "explicit size"
     }
   ]
 }

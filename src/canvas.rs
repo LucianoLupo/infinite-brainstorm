@@ -25,6 +25,10 @@ const SELECT_BOX_FILL: &str = "rgba(100, 200, 130, 0.15)";
 const SELECT_BOX_STROKE: &str = "#aaffbb";
 const RESIZE_HANDLE_COLOR: &str = "#aaffbb";
 const RESIZE_HANDLE_BG: &str = "#020202";
+const EDGE_LABEL_BG: &str = "rgba(2, 2, 2, 0.85)";
+const GROUP_BG: &str = "rgba(50, 170, 85, 0.06)";
+const GROUP_BORDER: &str = "rgba(50, 170, 85, 0.25)";
+const GROUP_LABEL_COLOR: &str = "#448855";
 const FONT: &str = "JetBrains Mono, Fira Code, Consolas, monospace";
 
 pub type ImageCache = Rc<RefCell<HashMap<String, Option<HtmlImageElement>>>>;
@@ -51,6 +55,8 @@ pub fn render_board(
 
     draw_grid(ctx, camera, width, height);
 
+    draw_groups(ctx, board, camera);
+
     for edge in &board.edges {
         let is_selected = selected_edge == Some(&edge.id);
         draw_edge(ctx, board, edge, camera, is_selected);
@@ -68,6 +74,49 @@ pub fn render_board(
 
     if let Some((min_x, min_y, max_x, max_y)) = selection_box {
         draw_selection_box(ctx, camera, min_x, min_y, max_x, max_y);
+    }
+}
+
+fn draw_groups(ctx: &CanvasRenderingContext2d, board: &Board, camera: &Camera) {
+    let mut groups: HashMap<&str, (f64, f64, f64, f64)> = HashMap::new();
+
+    for node in &board.nodes {
+        if let Some(ref group) = node.group {
+            let entry = groups.entry(group.as_str()).or_insert((
+                node.x,
+                node.y,
+                node.x + node.width,
+                node.y + node.height,
+            ));
+            entry.0 = entry.0.min(node.x);
+            entry.1 = entry.1.min(node.y);
+            entry.2 = entry.2.max(node.x + node.width);
+            entry.3 = entry.3.max(node.y + node.height);
+        }
+    }
+
+    let padding = 30.0;
+    let label_font_size = (10.0 * camera.zoom).max(7.0);
+
+    for (name, (min_x, min_y, max_x, max_y)) in &groups {
+        let (sx, sy) = camera.world_to_screen(min_x - padding, min_y - padding);
+        let (ex, ey) = camera.world_to_screen(max_x + padding, max_y + padding);
+        let w = ex - sx;
+        let h = ey - sy;
+
+        ctx.set_fill_style_str(GROUP_BG);
+        ctx.fill_rect(sx, sy, w, h);
+
+        ctx.set_stroke_style_str(GROUP_BORDER);
+        ctx.set_line_width(1.0);
+        ctx.stroke_rect(sx, sy, w, h);
+
+        ctx.set_fill_style_str(GROUP_LABEL_COLOR);
+        ctx.set_font(&format!("{}px {}", label_font_size, FONT));
+        ctx.set_text_align("left");
+        ctx.set_text_baseline("top");
+        let label_pad = 4.0 * camera.zoom;
+        let _ = ctx.fill_text(name, sx + label_pad, sy + label_pad);
     }
 }
 
@@ -463,6 +512,25 @@ fn draw_edge(ctx: &CanvasRenderingContext2d, board: &Board, edge: &crate::state:
         draw_arrowhead(ctx, to_sx, to_sy, angle, arrow_size);
 
         ctx.set_shadow_blur(0.0);
+
+        if let Some(ref label) = edge.label {
+            let mid_x = (from_sx + to_sx) / 2.0;
+            let mid_y = (from_sy + to_sy) / 2.0;
+            let label_font_size = (10.0 * camera.zoom).max(7.0);
+            ctx.set_font(&format!("{}px {}", label_font_size, FONT));
+            let text_metrics = ctx.measure_text(label).ok();
+            let text_w = text_metrics.map(|m| m.width()).unwrap_or(40.0);
+            let pill_h = label_font_size + 6.0;
+            let pill_w = text_w + 10.0;
+
+            ctx.set_fill_style_str(EDGE_LABEL_BG);
+            ctx.fill_rect(mid_x - pill_w / 2.0, mid_y - pill_h / 2.0, pill_w, pill_h);
+
+            ctx.set_fill_style_str(TEXT_DIM);
+            ctx.set_text_align("center");
+            ctx.set_text_baseline("middle");
+            let _ = ctx.fill_text(label, mid_x, mid_y);
+        }
     }
 }
 

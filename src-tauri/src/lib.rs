@@ -23,7 +23,9 @@ pub struct Node {
     pub id: String,
     pub x: f64,
     pub y: f64,
+    #[serde(default)]
     pub width: f64,
+    #[serde(default)]
     pub height: f64,
     pub text: String,
     #[serde(default = "default_node_type")]
@@ -49,6 +51,8 @@ pub struct Edge {
     pub id: String,
     pub from_node: String,
     pub to_node: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -486,6 +490,7 @@ mod tests {
                     id: "e1".to_string(),
                     from_node: "n1".to_string(),
                     to_node: "n2".to_string(),
+                    label: None,
                 }],
             };
 
@@ -694,6 +699,7 @@ mod tests {
                         id: format!("e{}", id),
                         from_node: format!("n{}", i),
                         to_node: format!("n{}", j),
+                        label: None,
                     });
                     id += 1;
                 }

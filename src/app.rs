@@ -267,7 +267,14 @@ pub fn App() -> impl IntoView {
         spawn_local(async move {
             // Small delay to ensure Tauri's __TAURI__ is injected
             gloo_timers::future::TimeoutFuture::new(50).await;
-            let loaded_board = load_board_storage().await;
+            let mut loaded_board = load_board_storage().await;
+            for node in &mut loaded_board.nodes {
+                if node.width == 0.0 || node.height == 0.0 {
+                    let (w, h) = Node::auto_size(&node.text);
+                    if node.width == 0.0 { node.width = w; }
+                    if node.height == 0.0 { node.height = h; }
+                }
+            }
             set_board.set(loaded_board);
         });
     });
@@ -283,7 +290,14 @@ pub fn App() -> impl IntoView {
             // Only external changes reach here (backend skips our own saves)
             web_sys::console::log_1(&"External board change detected, reloading...".into());
             spawn_local(async move {
-                let loaded_board = load_board_storage().await;
+                let mut loaded_board = load_board_storage().await;
+                for node in &mut loaded_board.nodes {
+                    if node.width == 0.0 || node.height == 0.0 {
+                        let (w, h) = Node::auto_size(&node.text);
+                        if node.width == 0.0 { node.width = w; }
+                        if node.height == 0.0 { node.height = h; }
+                    }
+                }
                 set_board.set(loaded_board);
             });
         });
@@ -840,6 +854,7 @@ pub fn App() -> impl IntoView {
                                 id: uuid::Uuid::new_v4().to_string(),
                                 from_node: from_id.clone(),
                                 to_node: target.id.clone(),
+                                label: None,
                             });
                         });
 
@@ -1096,6 +1111,7 @@ pub fn App() -> impl IntoView {
                                 id: uuid::Uuid::new_v4().to_string(),
                                 from_node: id_map[&e.from_node].clone(),
                                 to_node: id_map[&e.to_node].clone(),
+                                label: e.label.clone(),
                             }
                         }).collect();
 

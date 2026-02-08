@@ -227,6 +227,7 @@ pub fn App() -> impl IntoView {
     let history_for_paste = history;  // Last clone can take ownership
 
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
+    let file_input_ref = NodeRef::<leptos::html::Input>::new();
     let image_cache: ImageCache = Rc::new(RefCell::new(HashMap::new()));
     let image_cache_for_render = image_cache.clone();
     let image_cache_for_load = image_cache.clone();
@@ -1140,6 +1141,73 @@ pub fn App() -> impl IntoView {
         });
     }};
 
+    let on_upload = move |_ev: web_sys::MouseEvent| {
+        if let Some(input) = file_input_ref.get() {
+            let el: &web_sys::HtmlElement = &input;
+            el.click();
+        }
+    };
+
+    let on_file_selected = move |_ev: web_sys::Event| {
+        let input = file_input_ref.get().unwrap();
+        let input_el: &web_sys::HtmlInputElement = (*input).unchecked_ref();
+        let files = input_el.files().unwrap();
+        if files.length() == 0 {
+            return;
+        }
+        let file = files.get(0).unwrap();
+        let reader = web_sys::FileReader::new().unwrap();
+        let reader_clone = reader.clone();
+
+        let onload = Closure::wrap(Box::new(move || {
+            if let Ok(result) = reader_clone.result() {
+                if let Some(text) = result.as_string() {
+                    if let Ok(parsed) = serde_json::from_str::<Board>(&text) {
+                        set_board.set(parsed.clone());
+                        spawn_local(async move {
+                            save_board_storage(&parsed).await;
+                        });
+                    }
+                }
+            }
+        }) as Box<dyn Fn()>);
+
+        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+        onload.forget();
+        let _ = reader.read_as_text(&file);
+
+        // Reset input so re-uploading same file triggers change
+        input_el.set_value("");
+    };
+
+    let on_download = move |_ev: web_sys::MouseEvent| {
+        let current_board = board.get_untracked();
+        let json = serde_json::to_string_pretty(&current_board).unwrap_or_default();
+
+        let window = web_sys::window().unwrap();
+        let document = window.document().unwrap();
+
+        let array = js_sys::Array::new();
+        array.push(&JsValue::from_str(&json));
+        let opts = web_sys::BlobPropertyBag::new();
+        opts.set_type("application/json");
+        let blob = web_sys::Blob::new_with_str_sequence_and_options(&array, &opts).unwrap();
+
+        let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
+        let a: web_sys::HtmlAnchorElement = document
+            .create_element("a")
+            .unwrap()
+            .unchecked_into();
+        a.set_href(&url);
+        a.set_download("board.json");
+        a.click();
+        let _ = web_sys::Url::revoke_object_url(&url);
+    };
+
+    let button_style = "background: #0a0a0a; color: #66cc88; border: 1px solid #2a4a3a; \
+        padding: 6px 14px; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
+        font-size: 12px; cursor: pointer; border-radius: 4px;";
+
     view! {
         <div style="width: 100vw; height: 100vh; overflow: hidden; background: #020202; position: relative;">
             <canvas
@@ -1159,6 +1227,14 @@ pub fn App() -> impl IntoView {
             <MarkdownOverlays/>
             <ImageModal/>
             <MarkdownModal/>
+            <Show when=move || !is_tauri()>
+                <div style="position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; z-index: 100;">
+                    <button style=button_style on:click=on_upload>"Upload board.json"</button>
+                    <button style=button_style on:click=on_download>"Download board.json"</button>
+                </div>
+                <input type="file" accept=".json" node_ref=file_input_ref style="display:none"
+                       on:change=on_file_selected />
+            </Show>
             <div style="position: fixed; bottom: 12px; left: 12px; color: #66cc88; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 11px; letter-spacing: 0.5px;">
                 "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [CMD+V] paste  [T] type  [DEL] delete  [CMD+Z] undo  [CMD+SHIFT+Z] redo"
             </div>
@@ -1233,6 +1309,133 @@ mod tests {
         fn handles_md_in_path_but_wrong_extension() {
             assert!(!is_local_md_file("/path/to/markdown/file.txt"));
             assert!(!is_local_md_file("~/Documents/md-files/note.pdf"));
+        }
+    }
+
+    mod cycle_node_type_tests {
+        use super::*;
+
+        #[test]
+        fn cycles_through_all_types() {
+            assert_eq!(cycle_node_type("text"), "idea");
+            assert_eq!(cycle_node_type("idea"), "note");
+            assert_eq!(cycle_node_type("note"), "image");
+            assert_eq!(cycle_node_type("image"), "md");
+            assert_eq!(cycle_node_type("md"), "link");
+            assert_eq!(cycle_node_type("link"), "text");
+        }
+
+        #[test]
+        fn unknown_type_wraps_to_text() {
+            assert_eq!(cycle_node_type("unknown"), "text");
+            assert_eq!(cycle_node_type(""), "text");
+        }
+    }
+
+    mod intersects_box_tests {
+        use super::*;
+        use crate::state::Node;
+
+        fn node_at(x: f64, y: f64, w: f64, h: f64) -> Node {
+            Node { x, y, width: w, height: h, ..Node::new("t".into(), x, y, String::new()) }
+        }
+
+        #[test]
+        fn fully_inside() {
+            assert!(intersects_box(&node_at(10.0, 10.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+        }
+
+        #[test]
+        fn fully_outside_right() {
+            assert!(!intersects_box(&node_at(200.0, 10.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+        }
+
+        #[test]
+        fn fully_outside_left() {
+            assert!(!intersects_box(&node_at(-50.0, 10.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+        }
+
+        #[test]
+        fn fully_outside_above() {
+            assert!(!intersects_box(&node_at(10.0, -50.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+        }
+
+        #[test]
+        fn fully_outside_below() {
+            assert!(!intersects_box(&node_at(10.0, 200.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+        }
+
+        #[test]
+        fn partially_overlapping() {
+            assert!(intersects_box(&node_at(90.0, 90.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+        }
+
+        #[test]
+        fn touching_edge() {
+            assert!(intersects_box(&node_at(100.0, 0.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+        }
+    }
+
+    mod point_near_line_tests {
+        use super::*;
+
+        #[test]
+        fn point_on_line() {
+            assert!(point_near_line(5.0, 5.0, 0.0, 0.0, 10.0, 10.0, 1.0));
+        }
+
+        #[test]
+        fn point_far_from_line() {
+            assert!(!point_near_line(50.0, 50.0, 0.0, 0.0, 10.0, 0.0, 5.0));
+        }
+
+        #[test]
+        fn point_near_midpoint() {
+            assert!(point_near_line(5.0, 1.0, 0.0, 0.0, 10.0, 0.0, 2.0));
+        }
+
+        #[test]
+        fn point_near_endpoint() {
+            assert!(point_near_line(0.5, 0.0, 0.0, 0.0, 10.0, 0.0, 1.0));
+        }
+
+        #[test]
+        fn point_beyond_segment_end() {
+            assert!(!point_near_line(15.0, 0.0, 0.0, 0.0, 10.0, 0.0, 1.0));
+        }
+
+        #[test]
+        fn degenerate_zero_length_line() {
+            assert!(point_near_line(0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0));
+            assert!(!point_near_line(5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0));
+        }
+    }
+
+    mod parse_markdown_tests {
+        use super::*;
+
+        #[test]
+        fn renders_heading() {
+            let html = parse_markdown("# Hello");
+            assert!(html.contains("<h1>Hello</h1>"));
+        }
+
+        #[test]
+        fn renders_bold() {
+            let html = parse_markdown("**bold**");
+            assert!(html.contains("<strong>bold</strong>"));
+        }
+
+        #[test]
+        fn renders_list() {
+            let html = parse_markdown("- item 1\n- item 2");
+            assert!(html.contains("<li>item 1</li>"));
+            assert!(html.contains("<li>item 2</li>"));
+        }
+
+        #[test]
+        fn empty_input() {
+            assert_eq!(parse_markdown(""), "");
         }
     }
 }

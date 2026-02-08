@@ -36,6 +36,12 @@ web-sys = { version = "0.3", features = [
     "Navigator",
     "Clipboard",
     "Storage",
+    "FileReader",
+    "Blob",
+    "File",
+    "FileList",
+    "HtmlAnchorElement",
+    "BlobPropertyBag",
 ] }
 pulldown-cmark = "0.12"
 serde = { version = "1", features = ["derive"] }

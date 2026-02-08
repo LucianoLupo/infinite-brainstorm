@@ -346,7 +346,8 @@ jq '.nodes[] | select(.group == "cluster-a") | .color = "#ff6600"' board.json
 | Double-click md | Open markdown editor modal |
 | Double-click link | Open URL in browser (or view-only modal for local .md files) |
 | Shift+drag from node | Create edge to target node |
-| Cmd/Ctrl+V | Paste image from clipboard at cursor position |
+| Cmd/Ctrl+C | Copy selected nodes (and edges between them) |
+| Cmd/Ctrl+V | Paste copied nodes at cursor (or paste image from clipboard) |
 | T | Cycle type on selected nodes (text→idea→note→image→md→link) |
 | Delete/Backspace | Delete selected nodes or edge |
 | Cmd/Ctrl+Z | Undo last action |

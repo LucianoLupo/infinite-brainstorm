@@ -216,6 +216,7 @@ pub fn App() -> impl IntoView {
     let (modal_image, set_modal_image) = signal::<Option<String>>(None);
     let (modal_md, set_modal_md) = signal::<Option<(String, bool)>>(None); // (node_id, is_editing)
     let (md_edit_text, set_md_edit_text) = signal::<String>(String::new()); // Separate signal to avoid re-render on typing
+    let (node_clipboard, set_node_clipboard) = signal::<Option<(Vec<Node>, Vec<Edge>)>>(None);
 
     // Undo/redo history - using Rc<RefCell> since mutations don't need reactivity
     type BoardHistory = Rc<RefCell<History<Board>>>;
@@ -1052,6 +1053,69 @@ pub fn App() -> impl IntoView {
                     });
                 }
             }
+            "c" if ev.meta_key() || ev.ctrl_key() => {
+                if !selected.is_empty() {
+                    let current_board = board.get_untracked();
+                    let copied_nodes: Vec<Node> = current_board.nodes.iter()
+                        .filter(|n| selected.contains(&n.id))
+                        .cloned()
+                        .collect();
+                    let copied_edges: Vec<Edge> = current_board.edges.iter()
+                        .filter(|e| selected.contains(&e.from_node) && selected.contains(&e.to_node))
+                        .cloned()
+                        .collect();
+                    set_node_clipboard.set(Some((copied_nodes, copied_edges)));
+                }
+            }
+            "v" if ev.meta_key() || ev.ctrl_key() => {
+                if let Some((ref nodes, ref edges)) = node_clipboard.get_untracked() {
+                    if !nodes.is_empty() {
+                        ev.prevent_default();
+
+                        // Calculate center of copied nodes
+                        let cx = nodes.iter().map(|n| n.x + n.width / 2.0).sum::<f64>() / nodes.len() as f64;
+                        let cy = nodes.iter().map(|n| n.y + n.height / 2.0).sum::<f64>() / nodes.len() as f64;
+                        let (mouse_x, mouse_y) = last_mouse_world_pos.get_untracked();
+
+                        // Build old_id -> new_id mapping
+                        let id_map: HashMap<String, String> = nodes.iter()
+                            .map(|n| (n.id.clone(), uuid::Uuid::new_v4().to_string()))
+                            .collect();
+
+                        let new_nodes: Vec<Node> = nodes.iter().map(|n| {
+                            Node {
+                                id: id_map[&n.id].clone(),
+                                x: n.x - cx + mouse_x,
+                                y: n.y - cy + mouse_y,
+                                ..n.clone()
+                            }
+                        }).collect();
+
+                        let new_edges: Vec<Edge> = edges.iter().map(|e| {
+                            Edge {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                from_node: id_map[&e.from_node].clone(),
+                                to_node: id_map[&e.to_node].clone(),
+                            }
+                        }).collect();
+
+                        let new_ids: HashSet<String> = new_nodes.iter().map(|n| n.id.clone()).collect();
+
+                        history.borrow_mut().push(board.get_untracked());
+                        set_board.update(|b| {
+                            b.nodes.extend(new_nodes);
+                            b.edges.extend(new_edges);
+                        });
+                        set_selected_nodes.set(new_ids);
+
+                        let current_board = board.get_untracked();
+                        spawn_local(async move {
+                            save_board_storage(&current_board).await;
+                        });
+                    }
+                }
+                // If no internal clipboard, let ClipboardEvent fire for image paste
+            }
             "t" | "T" => {
                 if !selected.is_empty() {
                     // Record history before type change
@@ -1086,6 +1150,11 @@ pub fn App() -> impl IntoView {
     let on_paste = {
         let history = history_for_paste.clone();
         move |ev: web_sys::ClipboardEvent| {
+        // If internal node clipboard was used, keydown already handled it
+        if node_clipboard.get_untracked().as_ref().is_some_and(|(n, _)| !n.is_empty()) {
+            return;
+        }
+
         ev.prevent_default();
 
         if !is_tauri() {
@@ -1236,7 +1305,7 @@ pub fn App() -> impl IntoView {
                        on:change=on_file_selected />
             </Show>
             <div style="position: fixed; bottom: 12px; left: 12px; color: #66cc88; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 11px; letter-spacing: 0.5px;">
-                "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [CMD+V] paste  [T] type  [DEL] delete  [CMD+Z] undo  [CMD+SHIFT+Z] redo"
+                "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [CMD+C] copy  [CMD+V] paste  [T] type  [DEL] delete  [CMD+Z] undo  [CMD+SHIFT+Z] redo"
             </div>
         </div>
     }

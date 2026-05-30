@@ -90,23 +90,74 @@ fn load_board(app: AppHandle) -> Result<Board, String> {
     Ok(board)
 }
 
-#[tauri::command]
-fn save_board(app: AppHandle, board: Board) -> Result<(), String> {
-    let path = get_board_path(&app);
+/// Atomically write a board to `path`.
+///
+/// Strategy: serialize JSON, write it to a sibling temp file (`<path>.tmp`) in
+/// the SAME directory, `fsync` it, then `rename` it over `path`. Because rename
+/// is atomic on the same filesystem, readers (and the file watcher) never
+/// observe a partially-written file. Before the rename, the prior on-disk
+/// contents are copied to `<path>.bak` (best-effort). The `SKIP_NEXT_EMIT` flag
+/// is set immediately before the rename — the atomic commit point — so the file
+/// watcher's debounce window only opens once the new contents are visible.
+pub fn write_board_atomic(path: &std::path::Path, board: &Board) -> Result<(), String> {
+    use std::io::Write;
 
     // Create parent directory if needed (only on actual save, not on load)
     if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            let _ = fs::create_dir_all(parent);
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
     }
 
-    // Set flag to skip file watcher emission for our own save
+    let json = serde_json::to_string_pretty(board).map_err(|e| e.to_string())?;
+
+    // Write the serialized JSON to a sibling temp file in the same directory.
+    let tmp_path = {
+        let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        name.push(".tmp");
+        path.with_file_name(name)
+    };
+
+    {
+        let mut file = fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+        file.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
+        // fsync: flush the temp file's contents to disk before the rename so a
+        // crash mid-write can't leave a truncated file at the final path.
+        file.sync_all().map_err(|e| e.to_string())?;
+    }
+
+    // Best-effort backup of the prior on-disk contents. Ignore failures (e.g.
+    // no prior file yet, or a permissions hiccup) — the backup is advisory.
+    if path.exists() {
+        let bak_path = {
+            let mut name = path
+                .file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_default();
+            name.push(".bak");
+            path.with_file_name(name)
+        };
+        let _ = fs::copy(path, &bak_path);
+    }
+
+    // Set the skip flag at the atomic commit point — immediately before rename.
     SKIP_NEXT_EMIT.store(true, Ordering::SeqCst);
 
-    let json = serde_json::to_string_pretty(&board).map_err(|e| e.to_string())?;
-    fs::write(&path, json).map_err(|e| e.to_string())?;
+    fs::rename(&tmp_path, path).map_err(|e| {
+        // The rename failed, so we never actually committed — undo the skip flag
+        // and clean up the temp file so we don't leave litter behind.
+        SKIP_NEXT_EMIT.store(false, Ordering::SeqCst);
+        let _ = fs::remove_file(&tmp_path);
+        e.to_string()
+    })?;
+
     Ok(())
+}
+
+#[tauri::command]
+fn save_board(app: AppHandle, board: Board) -> Result<(), String> {
+    let path = get_board_path(&app);
+    write_board_atomic(&path, &board)
 }
 
 #[tauri::command]

@@ -2256,6 +2256,7 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-fs",
  "tauri-plugin-opener",
+ "tempfile",
  "tokio",
  "urlencoding",
  "uuid",

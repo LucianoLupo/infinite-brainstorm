@@ -194,6 +194,10 @@ pub struct RenderState<'a> {
     pub selection_box: Option<(f64, f64, f64, f64)>,
     pub image_cache: &'a ImageCache,
     pub link_preview_cache: &'a LinkPreviewCache,
+    /// Device-pixel ratio applied by the caller as a context transform
+    /// (`ctx.set_transform(dpr,0,0,dpr,0,0)`). All drawing here happens in CSS
+    /// pixels, so the on-screen dimensions are `backing-store / dpr`.
+    pub dpr: f64,
 }
 
 pub fn render_board(state: RenderState) {
@@ -209,10 +213,16 @@ pub fn render_board(state: RenderState) {
         selection_box,
         image_cache,
         link_preview_cache,
+        dpr,
     } = state;
 
-    let width = canvas.width() as f64;
-    let height = canvas.height() as f64;
+    // The backing store is sized `display * dpr`; the caller has scaled the
+    // context by `dpr`, so every draw call below works in CSS-pixel space.
+    // Use CSS dimensions for the background/grid so we cover exactly the visible
+    // area regardless of the device-pixel ratio.
+    let dpr = if dpr.is_finite() && dpr > 0.0 { dpr } else { 1.0 };
+    let width = canvas.width() as f64 / dpr;
+    let height = canvas.height() as f64 / dpr;
 
     ctx.set_fill_style_str(BG_COLOR);
     ctx.fill_rect(0.0, 0.0, width, height);

@@ -1,5 +1,5 @@
 use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache, LoadState, RenderState, IMAGE_CACHE_CAP};
-use crate::components::{ErrorBanner, ImageModal, MarkdownModal, MarkdownOverlays, NodeEditor, SearchOverlay};
+use crate::components::{ErrorBanner, ImageModal, MarkdownModal, MarkdownOverlays, Minimap, NodeEditor, SearchOverlay};
 use crate::history::{EditKind, History};
 use crate::interaction::{reduce, BoardAction, SideEffect};
 use crate::state::{Board, Camera, Edge, LinkPreview, Node, NodeType, ResizeHandle, RESIZE_HANDLE_SIZE, MIN_NODE_WIDTH, MIN_NODE_HEIGHT};
@@ -770,6 +770,54 @@ pub fn fit_camera(
     Camera { x: cam_x, y: cam_y, zoom }
 }
 
+/// Documented canvas grid spacing in world units. Node positions snap to this on
+/// drag release so layouts stay aligned (matches the 50px grid in CLAUDE.md).
+pub const GRID_SIZE: f64 = 50.0;
+
+/// Read `window.devicePixelRatio`, clamped to a sane `0.5..=4.0` range. Falls back
+/// to `1.0` when the window or property is unavailable (e.g. the test harness).
+fn device_pixel_ratio() -> f64 {
+    web_sys::window()
+        .map(|w| w.device_pixel_ratio())
+        .filter(|r| r.is_finite() && *r > 0.0)
+        .unwrap_or(1.0)
+        .clamp(0.5, 4.0)
+}
+
+/// Round a world coordinate to the nearest multiple of `grid`. A non-positive or
+/// non-finite grid is a no-op so a bad constant can't NaN the layout. Pure so the
+/// snap behavior is unit-testable without a canvas.
+#[must_use]
+pub fn snap_to_grid(v: f64, grid: f64) -> f64 {
+    if !grid.is_finite() || grid <= 0.0 || !v.is_finite() {
+        return v;
+    }
+    (v / grid).round() * grid
+}
+
+/// Compute a uniform fit transform mapping a world-space `bbox` into a `mw` x `mh`
+/// minimap, centered, with `pad` CSS pixels of inset on every side. Returns
+/// `(scale, off_x, off_y)` such that a world point `(wx, wy)` maps to minimap
+/// coords `(wx * scale + off_x, wy * scale + off_y)`. Pure + testable.
+#[must_use]
+pub fn minimap_transform(
+    bbox: (f64, f64, f64, f64),
+    mw: f64,
+    mh: f64,
+    pad: f64,
+) -> (f64, f64, f64) {
+    let (min_x, min_y, max_x, max_y) = bbox;
+    let box_w = (max_x - min_x).max(1.0);
+    let box_h = (max_y - min_y).max(1.0);
+    let avail_w = (mw - pad * 2.0).max(1.0);
+    let avail_h = (mh - pad * 2.0).max(1.0);
+    let scale = (avail_w / box_w).min(avail_h / box_h);
+    // Center the scaled box within the minimap.
+    let off_x = pad + (avail_w - box_w * scale) / 2.0 - min_x * scale;
+    let off_y = pad + (avail_h - box_h * scale) / 2.0 - min_y * scale;
+    (scale, off_x, off_y)
+}
+
 /// Serializable camera snapshot persisted to localStorage so a reopened board
 /// restores its last pan/zoom (F105). Kept separate from [`Camera`] (which is not
 /// `Serialize`) to avoid widening the shared type's derives.
@@ -816,6 +864,10 @@ pub struct BoardDataCtx {
     /// True while a debounced local write is queued or in flight. The file watcher
     /// can check this to avoid reloading over the user's own pending edits.
     pub local_edit_pending: RwSignal<bool>,
+    /// Main canvas display size in CSS pixels `(width, height)`, updated each
+    /// rendered frame. The minimap reads this to draw the viewport rectangle and
+    /// to recenter the camera on click. `(0, 0)` until the first frame lays out.
+    pub viewport_size: ReadSignal<(f64, f64)>,
 }
 
 /// Selection state: which nodes/edges are selected, plus the search overlay
@@ -895,6 +947,8 @@ pub fn App() -> impl IntoView {
     let (resize_state, set_resize_state) = signal(ResizeState::default());
     let (cursor_style, set_cursor_style) = signal("crosshair".to_string());
     let (last_mouse_world_pos, set_last_mouse_world_pos) = signal((0.0f64, 0.0f64));
+    // Main canvas display size in CSS px, refreshed each frame for the minimap.
+    let (viewport_size, set_viewport_size) = signal((0.0f64, 0.0f64));
     let (selection_box, set_selection_box) = signal::<Option<(f64, f64, f64, f64)>>(None);
     let (modal_image, set_modal_image) = signal::<Option<String>>(None);
     let (modal_md, set_modal_md) = signal::<Option<(String, bool)>>(None); // (node_id, is_editing)
@@ -983,6 +1037,7 @@ pub fn App() -> impl IntoView {
         set_camera,
         request_save,
         local_edit_pending,
+        viewport_size,
     });
     provide_context(SelectionCtx {
         selected_nodes,
@@ -1438,18 +1493,32 @@ pub fn App() -> impl IntoView {
             if let Some(canvas) = canvas_ref.get_untracked() {
                 let canvas_el: &HtmlCanvasElement = &canvas;
 
+                // HiDPI (F44): size the backing store at `display * dpr` so text
+                // and strokes render at full device resolution, then scale the 2D
+                // context by `dpr` so all drawing math stays in CSS pixels (the
+                // coordinate space the camera and hit-tests already use).
+                let dpr = device_pixel_ratio();
                 let rect = canvas_el.get_bounding_client_rect();
-                let display_width = rect.width() as u32;
-                let display_height = rect.height() as u32;
-
-                if canvas_el.width() != display_width {
-                    canvas_el.set_width(display_width);
+                // Publish the CSS-pixel viewport size for the minimap, but only on
+                // an actual change so we don't spuriously re-render it every frame.
+                let css_size = (rect.width(), rect.height());
+                if viewport_size.get_untracked() != css_size {
+                    set_viewport_size.set(css_size);
                 }
-                if canvas_el.height() != display_height {
-                    canvas_el.set_height(display_height);
+                let backing_width = (rect.width() * dpr).round() as u32;
+                let backing_height = (rect.height() * dpr).round() as u32;
+
+                if canvas_el.width() != backing_width {
+                    canvas_el.set_width(backing_width);
+                }
+                if canvas_el.height() != backing_height {
+                    canvas_el.set_height(backing_height);
                 }
 
                 if let Ok(ctx) = get_canvas_context(canvas_el) {
+                    // Reset to the identity transform first (set_transform replaces,
+                    // it doesn't compose) so repeated frames don't accumulate scale.
+                    let _ = ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0);
                     render_board(RenderState {
                         ctx: &ctx,
                         canvas: canvas_el,
@@ -1466,6 +1535,7 @@ pub fn App() -> impl IntoView {
                         selection_box: current_selection_box,
                         image_cache: &image_cache_for_render,
                         link_preview_cache: &link_preview_cache_for_render,
+                        dpr,
                     });
                 }
             }
@@ -1878,6 +1948,19 @@ pub fn App() -> impl IntoView {
         // Only persist if the drag actually moved nodes (a snapshot was taken).
         // A plain click (mouse down + up without moving) changes nothing (F114).
         if was_dragging && drag_snapshotted {
+            // Snap-to-grid on release (F110): align each moved node's top-left to
+            // the documented 50px grid so layouts stay tidy. The undo snapshot was
+            // already taken at drag start, so the snapped position is what persists.
+            let moved_ids: HashSet<&String> =
+                current_drag.node_start_positions.keys().collect();
+            set_board.update(|b| {
+                for node in b.nodes.iter_mut() {
+                    if moved_ids.contains(&node.id) {
+                        node.x = snap_to_grid(node.x, GRID_SIZE);
+                        node.y = snap_to_grid(node.y, GRID_SIZE);
+                    }
+                }
+            });
             request_save.call();
         }
 
@@ -2367,6 +2450,32 @@ pub fn App() -> impl IntoView {
         let _ = web_sys::Url::revoke_object_url(&url);
     };
 
+    // Export the current viewport as a PNG (F104). The canvas backing store is
+    // already sized at device resolution (HiDPI, F44), so `to_data_url` captures
+    // crisp pixels. Reuses the same download-anchor pattern as `on_download`.
+    let on_export_png = move |_ev: web_sys::MouseEvent| {
+        let Some(canvas) = canvas_ref.get_untracked() else {
+            return;
+        };
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Some(document) = window.document() else {
+            return;
+        };
+        let canvas_el: &HtmlCanvasElement = &canvas;
+        let Ok(data_url) = canvas_el.to_data_url_with_type("image/png") else {
+            return;
+        };
+        let Ok(el) = document.create_element("a") else {
+            return;
+        };
+        let a: web_sys::HtmlAnchorElement = el.unchecked_into();
+        a.set_href(&data_url);
+        a.set_download("board.png");
+        a.click();
+    };
+
     let button_style = "background: #0a0a0a; color: #66cc88; border: 1px solid #2a4a3a; \
         padding: 6px 14px; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
         font-size: 12px; cursor: pointer; border-radius: 4px;";
@@ -2392,11 +2501,15 @@ pub fn App() -> impl IntoView {
             <MarkdownModal/>
             <ErrorBanner/>
             <SearchOverlay/>
-            <Show when=move || !is_tauri()>
-                <div style="position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; z-index: 100;">
+            <Minimap/>
+            <div style="position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; z-index: 100;">
+                <Show when=move || !is_tauri()>
                     <button style=button_style on:click=on_upload>"Upload board.json"</button>
                     <button style=button_style on:click=on_download>"Download board.json"</button>
-                </div>
+                </Show>
+                <button style=button_style on:click=on_export_png>"Export PNG"</button>
+            </div>
+            <Show when=move || !is_tauri()>
                 <input type="file" accept=".json" node_ref=file_input_ref style="display:none"
                        on:change=on_file_selected />
             </Show>
@@ -2942,6 +3055,88 @@ mod tests {
             let (vx, vy) = cam.screen_to_world(cw / 2.0, ch / 2.0);
             assert!((vx - box_cx).abs() < 1e-6, "x center off: {vx} vs {box_cx}");
             assert!((vy - box_cy).abs() < 1e-6, "y center off: {vy} vs {box_cy}");
+        }
+    }
+
+    mod snap_to_grid_tests {
+        use super::*;
+
+        #[test]
+        fn rounds_to_nearest_multiple() {
+            assert_eq!(snap_to_grid(73.0, 50.0), 50.0);
+            assert_eq!(snap_to_grid(76.0, 50.0), 100.0);
+            assert_eq!(snap_to_grid(125.0, 50.0), 150.0); // .5 rounds away from zero
+        }
+
+        #[test]
+        fn exact_multiples_are_unchanged() {
+            assert_eq!(snap_to_grid(0.0, 50.0), 0.0);
+            assert_eq!(snap_to_grid(200.0, 50.0), 200.0);
+        }
+
+        #[test]
+        fn handles_negatives() {
+            assert_eq!(snap_to_grid(-73.0, 50.0), -50.0);
+            assert_eq!(snap_to_grid(-80.0, 50.0), -100.0);
+        }
+
+        #[test]
+        fn non_positive_grid_is_a_noop() {
+            assert_eq!(snap_to_grid(73.0, 0.0), 73.0);
+            assert_eq!(snap_to_grid(73.0, -50.0), 73.0);
+        }
+
+        #[test]
+        fn non_finite_inputs_are_passthrough() {
+            assert!(snap_to_grid(f64::NAN, 50.0).is_nan());
+            assert_eq!(snap_to_grid(10.0, f64::INFINITY), 10.0);
+        }
+    }
+
+    mod minimap_transform_tests {
+        use super::*;
+
+        #[test]
+        fn maps_box_corners_inside_minimap() {
+            let bbox = (0.0, 0.0, 1000.0, 500.0);
+            let (mw, mh, pad) = (200.0, 140.0, 8.0);
+            let (scale, off_x, off_y) = minimap_transform(bbox, mw, mh, pad);
+            // Top-left and bottom-right of the world box land within the padded area.
+            let (tlx, tly) = (bbox.0 * scale + off_x, bbox.1 * scale + off_y);
+            let (brx, bry) = (bbox.2 * scale + off_x, bbox.3 * scale + off_y);
+            assert!(tlx >= pad - 1e-6 && tly >= pad - 1e-6, "tl {tlx},{tly}");
+            assert!(brx <= mw - pad + 1e-6 && bry <= mh - pad + 1e-6, "br {brx},{bry}");
+        }
+
+        #[test]
+        fn forward_inverse_round_trips() {
+            let bbox = (-300.0, 100.0, 700.0, 900.0);
+            let (scale, off_x, off_y) = minimap_transform(bbox, 200.0, 140.0, 8.0);
+            // Invert: world = (mini - off) / scale.
+            let world_x = 450.0;
+            let world_y = 250.0;
+            let mini_x = world_x * scale + off_x;
+            let mini_y = world_y * scale + off_y;
+            assert!(((mini_x - off_x) / scale - world_x).abs() < 1e-6);
+            assert!(((mini_y - off_y) / scale - world_y).abs() < 1e-6);
+        }
+
+        #[test]
+        fn degenerate_box_does_not_panic() {
+            let (scale, off_x, off_y) = minimap_transform((5.0, 5.0, 5.0, 5.0), 200.0, 140.0, 8.0);
+            assert!(scale.is_finite() && off_x.is_finite() && off_y.is_finite());
+            assert!(scale > 0.0);
+        }
+
+        #[test]
+        fn uniform_scale_preserves_aspect() {
+            // A wide box should be limited by width; the same scale applies to both
+            // axes, so the height maps to less than the available height.
+            let bbox = (0.0, 0.0, 1000.0, 100.0);
+            let (mw, mh, pad) = (200.0, 140.0, 8.0);
+            let (scale, _, _) = minimap_transform(bbox, mw, mh, pad);
+            let avail_w = mw - pad * 2.0;
+            assert!((scale - avail_w / 1000.0).abs() < 1e-6);
         }
     }
 

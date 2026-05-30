@@ -1090,9 +1090,11 @@ pub fn App() -> impl IntoView {
                 });
             }
         } else {
+            let node_map: HashMap<&str, &Node> =
+                current_board.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
             let clicked_edge = current_board.edges.iter().find(|edge| {
-                let from = current_board.nodes.iter().find(|n| n.id == edge.from_node);
-                let to = current_board.nodes.iter().find(|n| n.id == edge.to_node);
+                let from = node_map.get(edge.from_node.as_str());
+                let to = node_map.get(edge.to_node.as_str());
                 if let (Some(from), Some(to)) = (from, to) {
                     let from_cx = from.x + from.width / 2.0;
                     let from_cy = from.y + from.height / 2.0;

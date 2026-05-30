@@ -57,13 +57,15 @@ pub fn render_board(
 
     draw_groups(ctx, board, camera);
 
+    let node_map: HashMap<&str, &Node> = board.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
     for edge in &board.edges {
         let is_selected = selected_edge == Some(&edge.id);
-        draw_edge(ctx, board, edge, camera, is_selected);
+        draw_edge(ctx, &node_map, edge, camera, is_selected);
     }
 
     if let Some((Some(from_node_id), to_screen_x, to_screen_y)) = edge_preview {
-        draw_edge_preview(ctx, board, from_node_id, to_screen_x, to_screen_y, camera);
+        draw_edge_preview(ctx, &node_map, from_node_id, to_screen_x, to_screen_y, camera);
     }
 
     for node in &board.nodes {
@@ -472,9 +474,9 @@ fn draw_arrowhead(ctx: &CanvasRenderingContext2d, tip_x: f64, tip_y: f64, angle:
     ctx.fill();
 }
 
-fn draw_edge(ctx: &CanvasRenderingContext2d, board: &Board, edge: &crate::state::Edge, camera: &Camera, is_selected: bool) {
-    let from_node = board.nodes.iter().find(|n| n.id == edge.from_node);
-    let to_node = board.nodes.iter().find(|n| n.id == edge.to_node);
+fn draw_edge(ctx: &CanvasRenderingContext2d, node_map: &HashMap<&str, &Node>, edge: &crate::state::Edge, camera: &Camera, is_selected: bool) {
+    let from_node = node_map.get(edge.from_node.as_str());
+    let to_node = node_map.get(edge.to_node.as_str());
 
     if let (Some(from), Some(to)) = (from_node, to_node) {
         let from_cx = from.x + from.width / 2.0;
@@ -536,13 +538,13 @@ fn draw_edge(ctx: &CanvasRenderingContext2d, board: &Board, edge: &crate::state:
 
 fn draw_edge_preview(
     ctx: &CanvasRenderingContext2d,
-    board: &Board,
+    node_map: &HashMap<&str, &Node>,
     from_node_id: &str,
     to_screen_x: f64,
     to_screen_y: f64,
     camera: &Camera,
 ) {
-    if let Some(from) = board.nodes.iter().find(|n| n.id == from_node_id) {
+    if let Some(from) = node_map.get(from_node_id) {
         let from_cx = from.x + from.width / 2.0;
         let from_cy = from.y + from.height / 2.0;
 

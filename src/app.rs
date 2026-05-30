@@ -4,7 +4,7 @@ use crate::history::History;
 use crate::state::{Board, Camera, Edge, LinkPreview, Node, ResizeHandle, RESIZE_HANDLE_SIZE, MIN_NODE_WIDTH, MIN_NODE_HEIGHT};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use pulldown_cmark::{html, Parser};
+use pulldown_cmark::{html, Event, Parser};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -195,7 +195,14 @@ fn cycle_node_type(current: &str) -> String {
 }
 
 pub(crate) fn parse_markdown(md: &str) -> String {
-    let parser = Parser::new(md);
+    // Sanitize: map any raw-HTML events to escaped Text so author-controlled
+    // markup (e.g. `<img onerror=...>`) is rendered as literal text rather than
+    // reaching the inner_html sink as active HTML. push_html HTML-escapes Text
+    // events, so the angle brackets show and no attributes/handlers execute.
+    let parser = Parser::new(md).map(|event| match event {
+        Event::Html(html) | Event::InlineHtml(html) => Event::Text(html),
+        other => other,
+    });
     let mut html_output = String::new();
     html::push_html(&mut html_output, parser);
     html_output
@@ -1812,6 +1819,30 @@ mod tests {
         #[test]
         fn empty_input() {
             assert_eq!(parse_markdown(""), "");
+        }
+
+        #[test]
+        fn strips_raw_html_xss() {
+            // Stored-XSS payload: the raw <img onerror=...> must not reach the
+            // inner_html sink as an active element. It is escaped to literal text,
+            // so the angle brackets render and no element/handler executes.
+            let html = parse_markdown("<img src=x onerror=alert(1)>");
+            // No active <img> element: the opening angle bracket is escaped, so the
+            // browser parses the payload as inert text, not a tag with a handler.
+            assert!(
+                !html.contains("<img"),
+                "active <img> element leaked: {html}"
+            );
+            // The whole payload is escaped — the literal angle brackets survive.
+            assert!(html.contains("&lt;img"), "expected escaped markup: {html}");
+            assert!(html.contains("&gt;"), "expected escaped closing bracket: {html}");
+        }
+
+        #[test]
+        fn strips_inline_html_script() {
+            let html = parse_markdown("hello <script>alert(1)</script> world");
+            assert!(!html.contains("<script>"), "raw <script> leaked: {html}");
+            assert!(html.contains("&lt;script&gt;"), "expected escaped script: {html}");
         }
     }
 }

@@ -7,7 +7,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use pulldown_cmark::{html, Event, Parser};
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
@@ -936,52 +936,108 @@ pub fn App() -> impl IntoView {
         }
     });
 
+    // Render coalescer (P2.1): instead of drawing synchronously on every signal
+    // change (once per mousemove during a drag), each change marks the canvas
+    // dirty and schedules a SINGLE requestAnimationFrame. The rAF callback reads
+    // the freshest signal values via `get_untracked()` and renders once per
+    // frame, so a burst of mutations within one frame collapses to one draw.
+    let render_scheduled: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+    // Holds the rAF callback so it isn't dropped while the browser owns it.
+    let render_closure: Rc<RefCell<Option<Closure<dyn FnMut()>>>> =
+        Rc::new(RefCell::new(None));
+
+    {
+        let render_scheduled = render_scheduled.clone();
+        let render_closure_store = render_closure.clone();
+        let image_cache_for_render = image_cache_for_render.clone();
+        let link_preview_cache_for_render = link_preview_cache_for_render.clone();
+
+        let closure = Closure::wrap(Box::new(move || {
+            // Allow the next frame to be scheduled even if this render bails early.
+            render_scheduled.set(false);
+
+            let current_board = board.get_untracked();
+            let current_camera = camera.get_untracked();
+            let current_selected = selected_nodes.get_untracked();
+            let current_selected_edge = selected_edge.get_untracked();
+            let current_editing = editing_node.get_untracked();
+            let current_edge_creation = edge_creation.get_untracked();
+            let current_selection_box = selection_box.get_untracked();
+
+            if let Some(canvas) = canvas_ref.get_untracked() {
+                let canvas_el: &HtmlCanvasElement = &canvas;
+
+                let rect = canvas_el.get_bounding_client_rect();
+                let display_width = rect.width() as u32;
+                let display_height = rect.height() as u32;
+
+                if canvas_el.width() != display_width {
+                    canvas_el.set_width(display_width);
+                }
+                if canvas_el.height() != display_height {
+                    canvas_el.set_height(display_height);
+                }
+
+                if let Ok(ctx) = get_canvas_context(canvas_el) {
+                    render_board(
+                        &ctx,
+                        canvas_el,
+                        &current_board,
+                        &current_camera,
+                        &current_selected,
+                        current_selected_edge.as_ref(),
+                        current_editing.as_ref(),
+                        current_edge_creation.is_creating.then_some({
+                            (
+                                current_edge_creation.from_node_id.as_ref(),
+                                current_edge_creation.current_x,
+                                current_edge_creation.current_y,
+                            )
+                        }),
+                        current_selection_box,
+                        &image_cache_for_render,
+                        &link_preview_cache_for_render,
+                    );
+                }
+            }
+        }) as Box<dyn FnMut()>);
+
+        *render_closure_store.borrow_mut() = Some(closure);
+    }
+
+    // Subscribe to every render input; on any change, schedule at most one frame.
     Effect::new(move || {
-        let current_board = board.get();
-        let current_camera = camera.get();
-        let current_selected = selected_nodes.get();
-        let current_selected_edge = selected_edge.get();
-        let current_editing = editing_node.get();
-        let current_edge_creation = edge_creation.get();
-        let current_selection_box = selection_box.get();
-        let _ = image_load_trigger.get(); // Subscribe to image loads
-        let _ = link_preview_trigger.get(); // Subscribe to link preview loads
+        // Touch all render-affecting signals so this effect re-runs on any change.
+        board.track();
+        camera.track();
+        selected_nodes.track();
+        selected_edge.track();
+        editing_node.track();
+        edge_creation.track();
+        selection_box.track();
+        image_load_trigger.track(); // image loads
+        link_preview_trigger.track(); // link preview loads
 
-        if let Some(canvas) = canvas_ref.get() {
-            let canvas_el: &HtmlCanvasElement = &canvas;
+        if render_scheduled.replace(true) {
+            // A frame is already queued; the rAF callback will pick up the latest
+            // signal values, so there's nothing more to do.
+            return;
+        }
 
-            let rect = canvas_el.get_bounding_client_rect();
-            let display_width = rect.width() as u32;
-            let display_height = rect.height() as u32;
-
-            if canvas_el.width() != display_width {
-                canvas_el.set_width(display_width);
+        if let Some(closure) = render_closure.borrow().as_ref() {
+            if let Some(win) = web_sys::window() {
+                if win
+                    .request_animation_frame(closure.as_ref().unchecked_ref())
+                    .is_err()
+                {
+                    // Scheduling failed — clear the flag so a later change can retry.
+                    render_scheduled.set(false);
+                }
+            } else {
+                render_scheduled.set(false);
             }
-            if canvas_el.height() != display_height {
-                canvas_el.set_height(display_height);
-            }
-
-            if let Ok(ctx) = get_canvas_context(canvas_el) {
-                render_board(
-                    &ctx,
-                    canvas_el,
-                    &current_board,
-                    &current_camera,
-                    &current_selected,
-                    current_selected_edge.as_ref(),
-                    current_editing.as_ref(),
-                    current_edge_creation.is_creating.then_some({
-                        (
-                            current_edge_creation.from_node_id.as_ref(),
-                            current_edge_creation.current_x,
-                            current_edge_creation.current_y,
-                        )
-                    }),
-                    current_selection_box,
-                    &image_cache_for_render,
-                    &link_preview_cache_for_render,
-                );
-            }
+        } else {
+            render_scheduled.set(false);
         }
     });
 

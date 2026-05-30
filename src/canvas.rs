@@ -36,6 +36,51 @@ const FONT: &str = "JetBrains Mono, Fira Code, Consolas, monospace";
 pub type ImageCache = Rc<RefCell<HashMap<String, Option<HtmlImageElement>>>>;
 pub type LinkPreviewCache = Rc<RefCell<HashMap<String, Option<LinkPreview>>>>;
 
+/// Extra screen-space margin (px) kept around the canvas when culling, so that
+/// nodes/edges straddling the viewport edge (and their shadows, arrowheads, and
+/// labels) still draw instead of popping in/out as they cross the boundary.
+const CULL_MARGIN: f64 = 64.0;
+
+/// Returns `true` when the screen-space axis-aligned box `[x0,x1] x [y0,y1]`
+/// lies fully outside the canvas viewport (expanded by [`CULL_MARGIN`]) and can
+/// therefore be skipped. Boxes that overlap the viewport at all are kept.
+fn box_outside_viewport(x0: f64, y0: f64, x1: f64, y1: f64, view_w: f64, view_h: f64) -> bool {
+    // Normalise so x0<=x1, y0<=y1 regardless of caller ordering.
+    let (lo_x, hi_x) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
+    let (lo_y, hi_y) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+    hi_x < -CULL_MARGIN
+        || lo_x > view_w + CULL_MARGIN
+        || hi_y < -CULL_MARGIN
+        || lo_y > view_h + CULL_MARGIN
+}
+
+/// Returns `true` when an edge can be skipped because the screen-space bounding
+/// box spanning its two endpoint node centers is fully outside the viewport.
+/// Edges whose endpoints are missing draw nothing, so they're also "outside".
+/// Using node centers (a superset of the clipped+arrowhead line) means a kept
+/// edge is never wrongly culled.
+fn edge_outside_viewport(
+    node_map: &HashMap<&str, &Node>,
+    edge: &crate::state::Edge,
+    camera: &Camera,
+    view_w: f64,
+    view_h: f64,
+) -> bool {
+    match (
+        node_map.get(edge.from_node.as_str()),
+        node_map.get(edge.to_node.as_str()),
+    ) {
+        (Some(from), Some(to)) => {
+            let (fx, fy) =
+                camera.world_to_screen(from.x + from.width / 2.0, from.y + from.height / 2.0);
+            let (tx, ty) =
+                camera.world_to_screen(to.x + to.width / 2.0, to.y + to.height / 2.0);
+            box_outside_viewport(fx, fy, tx, ty, view_w, view_h)
+        }
+        _ => true,
+    }
+}
+
 pub fn render_board(
     ctx: &CanvasRenderingContext2d,
     canvas: &HtmlCanvasElement,
@@ -62,6 +107,9 @@ pub fn render_board(
     let node_map: HashMap<&str, &Node> = board.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
     for edge in &board.edges {
+        if edge_outside_viewport(&node_map, edge, camera, width, height) {
+            continue;
+        }
         let is_selected = selected_edge == Some(&edge.id);
         draw_edge(ctx, &node_map, edge, camera, is_selected);
     }
@@ -71,6 +119,12 @@ pub fn render_board(
     }
 
     for node in &board.nodes {
+        let (sx, sy) = camera.world_to_screen(node.x, node.y);
+        let sw = node.width * camera.zoom;
+        let sh = node.height * camera.zoom;
+        if box_outside_viewport(sx, sy, sx + sw, sy + sh, width, height) {
+            continue;
+        }
         let is_selected = selected_nodes.contains(&node.id);
         let is_editing = editing_node == Some(&node.id);
         draw_node(ctx, node, camera, is_selected, is_editing, image_cache, link_preview_cache);
@@ -82,6 +136,12 @@ pub fn render_board(
 }
 
 fn draw_groups(ctx: &CanvasRenderingContext2d, board: &Board, camera: &Camera) {
+    // Early-out the common case: no grouped nodes means nothing to draw and we
+    // skip allocating the bounds map entirely.
+    if !board.nodes.iter().any(|n| n.group.is_some()) {
+        return;
+    }
+
     let mut groups: HashMap<&str, (f64, f64, f64, f64)> = HashMap::new();
 
     for node in &board.nodes {
@@ -803,6 +863,123 @@ mod tests {
             assert!((rx - 100.0).abs() < 1e-10);
             assert!((ly - 0.0).abs() < 1e-10);
             assert!((ry - 0.0).abs() < 1e-10);
+        }
+    }
+
+    mod culling_tests {
+        use super::*;
+
+        // Viewport is 800x600 for these tests.
+        const W: f64 = 800.0;
+        const H: f64 = 600.0;
+
+        #[test]
+        fn fully_inside_is_kept() {
+            assert!(!box_outside_viewport(100.0, 100.0, 300.0, 200.0, W, H));
+        }
+
+        #[test]
+        fn fully_left_is_culled() {
+            // Entirely past the left edge + margin.
+            assert!(box_outside_viewport(-500.0, 100.0, -100.0, 200.0, W, H));
+        }
+
+        #[test]
+        fn fully_right_is_culled() {
+            assert!(box_outside_viewport(1000.0, 100.0, 1200.0, 200.0, W, H));
+        }
+
+        #[test]
+        fn fully_above_is_culled() {
+            assert!(box_outside_viewport(100.0, -400.0, 200.0, -100.0, W, H));
+        }
+
+        #[test]
+        fn fully_below_is_culled() {
+            assert!(box_outside_viewport(100.0, 800.0, 200.0, 1000.0, W, H));
+        }
+
+        #[test]
+        fn straddling_left_edge_is_kept() {
+            // Crosses x=0, so partially visible — must not be culled.
+            assert!(!box_outside_viewport(-50.0, 100.0, 50.0, 200.0, W, H));
+        }
+
+        #[test]
+        fn just_outside_but_within_margin_is_kept() {
+            // Right edge sits at x=-CULL_MARGIN+1, still inside the kept band.
+            assert!(!box_outside_viewport(-200.0, 100.0, -CULL_MARGIN + 1.0, 200.0, W, H));
+        }
+
+        #[test]
+        fn unordered_coords_normalised() {
+            // Caller may pass x1<x0 (e.g. an edge drawn right-to-left); result must
+            // match the ordered case.
+            assert!(!box_outside_viewport(300.0, 200.0, 100.0, 100.0, W, H));
+            assert!(box_outside_viewport(-100.0, 200.0, -500.0, 100.0, W, H));
+        }
+
+        fn node_at(id: &str, x: f64, y: f64) -> Node {
+            // Node::new defaults to 200x100 dimensions.
+            Node::new(id.to_string(), x, y, "n".to_string())
+        }
+
+        #[test]
+        fn edge_inside_is_kept() {
+            let a = node_at("a", 100.0, 100.0);
+            let b = node_at("b", 300.0, 200.0);
+            let map: HashMap<&str, &Node> = [("a", &a), ("b", &b)].into_iter().collect();
+            let edge = crate::state::Edge {
+                id: "e".into(),
+                from_node: "a".into(),
+                to_node: "b".into(),
+                label: None,
+            };
+            assert!(!edge_outside_viewport(&map, &edge, &Camera::new(), W, H));
+        }
+
+        #[test]
+        fn edge_far_offscreen_is_culled() {
+            let a = node_at("a", 5000.0, 5000.0);
+            let b = node_at("b", 5300.0, 5200.0);
+            let map: HashMap<&str, &Node> = [("a", &a), ("b", &b)].into_iter().collect();
+            let edge = crate::state::Edge {
+                id: "e".into(),
+                from_node: "a".into(),
+                to_node: "b".into(),
+                label: None,
+            };
+            assert!(edge_outside_viewport(&map, &edge, &Camera::new(), W, H));
+        }
+
+        #[test]
+        fn edge_with_missing_endpoint_is_culled() {
+            let a = node_at("a", 100.0, 100.0);
+            let map: HashMap<&str, &Node> = [("a", &a)].into_iter().collect();
+            let edge = crate::state::Edge {
+                id: "e".into(),
+                from_node: "a".into(),
+                to_node: "missing".into(),
+                label: None,
+            };
+            assert!(edge_outside_viewport(&map, &edge, &Camera::new(), W, H));
+        }
+
+        #[test]
+        fn edge_crossing_viewport_is_kept() {
+            // One endpoint far off-screen left, the other far off-screen right —
+            // the line crosses the viewport, so the bounding box overlaps and it
+            // must be kept.
+            let a = node_at("a", -5000.0, 300.0);
+            let b = node_at("b", 5000.0, 300.0);
+            let map: HashMap<&str, &Node> = [("a", &a), ("b", &b)].into_iter().collect();
+            let edge = crate::state::Edge {
+                id: "e".into(),
+                from_node: "a".into(),
+                to_node: "b".into(),
+                label: None,
+            };
+            assert!(!edge_outside_viewport(&map, &edge, &Camera::new(), W, H));
         }
     }
 }

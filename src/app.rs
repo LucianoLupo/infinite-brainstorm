@@ -1617,6 +1617,117 @@ pub fn App() -> impl IntoView {
         }
     };
 
+    // True while any pointer gesture is in flight. Used to drive document-level
+    // mousemove/mouseup continuation so a drag that leaves the canvas keeps
+    // tracking and finalizes exactly once on release off-canvas (F20).
+    let gesture_active = move || {
+        drag_state.get_untracked().is_dragging
+            || drag_state.get_untracked().is_box_selecting
+            || pan_state.get_untracked().is_panning
+            || resize_state.get_untracked().is_resizing
+            || edge_creation.get_untracked().is_creating
+    };
+
+    // mouseleave gets its OWN handler: it must NOT finalize edge-create/box-select
+    // or trigger a save (that's what made dragging to the window edge drop the
+    // gesture, F20). It only resets the transient hover cursor; the gesture itself
+    // continues via the document-level listeners registered below.
+    let on_mouse_leave = move |_ev: web_sys::MouseEvent| {
+        if !gesture_active() {
+            set_cursor_style.set("crosshair".to_string());
+        }
+    };
+
+    // Document-level continuation (F20). While a gesture is active, mouse events
+    // that land outside the canvas (off the element, including past the window
+    // edge) still reach `document`. We forward those to the same move/up handlers
+    // so the drag keeps tracking and releases finalize once. On-canvas events are
+    // already handled by the canvas listeners, so we skip them here to avoid
+    // double-processing.
+    {
+        let on_mouse_move_doc = on_mouse_move;
+        let on_mouse_up_doc = on_mouse_up;
+        Effect::new(move |prev: Option<()>| {
+            // Register exactly once.
+            if prev.is_some() {
+                return;
+            }
+            let Some(window) = web_sys::window() else { return };
+            let Some(document) = window.document() else { return };
+
+            let is_outside_canvas = move |ev: &web_sys::MouseEvent| {
+                match canvas_ref.get_untracked() {
+                    Some(canvas) => {
+                        let canvas_el: &web_sys::Element = canvas.as_ref();
+                        ev.target()
+                            .and_then(|t| t.dyn_into::<web_sys::Node>().ok())
+                            .map(|node| !canvas_el.contains(Some(&node)))
+                            .unwrap_or(true)
+                    }
+                    None => true,
+                }
+            };
+
+            let move_cb = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(
+                move |ev: web_sys::MouseEvent| {
+                    if gesture_active() && is_outside_canvas(&ev) {
+                        on_mouse_move_doc(ev);
+                    }
+                },
+            );
+            let up_cb = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(
+                move |ev: web_sys::MouseEvent| {
+                    if gesture_active() && is_outside_canvas(&ev) {
+                        on_mouse_up_doc(ev);
+                    }
+                },
+            );
+
+            let _ = document.add_event_listener_with_callback(
+                "mousemove",
+                move_cb.as_ref().unchecked_ref(),
+            );
+            let _ = document.add_event_listener_with_callback(
+                "mouseup",
+                up_cb.as_ref().unchecked_ref(),
+            );
+            move_cb.forget();
+            up_cb.forget();
+        });
+    }
+
+    // Document-level Escape handler (F58/F107/F113): closes the active modal even
+    // when canvas focus has been lost (e.g. after clicking inside the modal). The
+    // canvas keydown only fires while the canvas is focused, so modals need their
+    // own listener to stay closeable.
+    {
+        Effect::new(move |prev: Option<()>| {
+            if prev.is_some() {
+                return;
+            }
+            let Some(window) = web_sys::window() else { return };
+            let Some(document) = window.document() else { return };
+
+            let esc_cb = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(
+                move |ev: web_sys::KeyboardEvent| {
+                    if ev.key() == "Escape"
+                        && (modal_image.get_untracked().is_some()
+                            || modal_md.get_untracked().is_some())
+                    {
+                        set_modal_image.set(None);
+                        set_modal_md.set(None);
+                    }
+                },
+            );
+
+            let _ = document.add_event_listener_with_callback(
+                "keydown",
+                esc_cb.as_ref().unchecked_ref(),
+            );
+            esc_cb.forget();
+        });
+    }
+
     let on_wheel = move |ev: web_sys::WheelEvent| {
         ev.prevent_default();
 
@@ -1700,6 +1811,12 @@ pub fn App() -> impl IntoView {
 
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
         if editing_node.get_untracked().is_some() {
+            return;
+        }
+        // While a modal is open, swallow canvas shortcuts (F113). The document-level
+        // Escape listener handles closing the modal; everything else (delete, copy,
+        // type-cycle, fit, etc.) must not fire and mutate the board behind the modal.
+        if modal_md.get_untracked().is_some() || modal_image.get_untracked().is_some() {
             return;
         }
 
@@ -1993,8 +2110,8 @@ pub fn App() -> impl IntoView {
                 style=move || format!("width: 100%; height: 100%; display: block; cursor: {}; outline: none;", cursor_style.get())
                 on:mousedown=on_mouse_down
                 on:mousemove=on_mouse_move
-                on:mouseup=on_mouse_up.clone()
-                on:mouseleave=on_mouse_up
+                on:mouseup=on_mouse_up
+                on:mouseleave=on_mouse_leave
                 on:wheel=on_wheel
                 on:dblclick=on_double_click
                 on:keydown=on_keydown

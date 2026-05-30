@@ -105,6 +105,18 @@ pub fn MarkdownModal() -> impl IntoView {
                                     }
                                 }
                             }}
+                            <button
+                                style="background: transparent; color: #66cc88; border: 1px solid #66cc88; \
+                                       width: 34px; padding: 8px 0; cursor: pointer; \
+                                       font-family: inherit; font-size: 16px; line-height: 1;"
+                                title="Close (Esc)"
+                                on:click=move |ev: web_sys::MouseEvent| {
+                                    ev.stop_propagation();
+                                    ctx.set_modal_md.set(None);
+                                }
+                            >
+                                "\u{00d7}"
+                            </button>
                         </div>
                         <div style="flex: 1; overflow-y: auto; min-height: 0;">
                             {move || {

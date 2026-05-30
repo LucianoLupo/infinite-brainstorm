@@ -1,6 +1,5 @@
 use leptos::prelude::*;
-use leptos::task::spawn_local;
-use crate::app::{BoardCtx, is_local_md_file, parse_markdown, save_board_storage};
+use crate::app::{BoardCtx, is_local_md_file, parse_markdown};
 
 #[component]
 pub fn MarkdownModal() -> impl IntoView {
@@ -61,10 +60,7 @@ pub fn MarkdownModal() -> impl IntoView {
                                                     }
                                                 });
 
-                                                let current_board = ctx.board.get_untracked();
-                                                spawn_local(async move {
-                                                    save_board_storage(&current_board).await;
-                                                });
+                                                ctx.request_save.call();
 
                                                 ctx.set_modal_md.set(Some((node_id_save.clone(), false)));
                                             }

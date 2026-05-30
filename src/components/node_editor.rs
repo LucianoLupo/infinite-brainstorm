@@ -1,7 +1,6 @@
 use leptos::prelude::*;
-use leptos::task::spawn_local;
 use wasm_bindgen::JsCast;
-use crate::app::{BoardCtx, save_board_storage};
+use crate::app::BoardCtx;
 
 #[component]
 pub fn NodeEditor() -> impl IntoView {
@@ -32,10 +31,7 @@ pub fn NodeEditor() -> impl IntoView {
                                     }
                                 });
 
-                                let current_board = ctx.board.get_untracked();
-                                spawn_local(async move {
-                                    save_board_storage(&current_board).await;
-                                });
+                                ctx.request_save.call();
                             }
                         }
                         ctx.set_editing_node.set(None);
@@ -54,10 +50,7 @@ pub fn NodeEditor() -> impl IntoView {
                                         }
                                     });
 
-                                    let current_board = ctx.board.get_untracked();
-                                    spawn_local(async move {
-                                        save_board_storage(&current_board).await;
-                                    });
+                                    ctx.request_save.call();
                                 }
                             }
                             ctx.set_editing_node.set(None);
@@ -92,10 +85,7 @@ pub fn NodeEditor() -> impl IntoView {
                                     }
                                 });
 
-                                let current_board = ctx.board.get_untracked();
-                                spawn_local(async move {
-                                    save_board_storage(&current_board).await;
-                                });
+                                ctx.request_save.call();
                             }
                         }
                         ctx.set_editing_node.set(None);
@@ -115,10 +105,7 @@ pub fn NodeEditor() -> impl IntoView {
                                             }
                                         });
 
-                                        let current_board = ctx.board.get_untracked();
-                                        spawn_local(async move {
-                                            save_board_storage(&current_board).await;
-                                        });
+                                        ctx.request_save.call();
                                         ctx.set_editing_node.set(None);
                                     }
                                 }

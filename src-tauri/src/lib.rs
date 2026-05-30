@@ -70,7 +70,9 @@ pub fn write_board_atomic(path: &std::path::Path, board: &Board) -> Result<(), S
         }
     }
 
-    let json = serde_json::to_string_pretty(board).map_err(|e| e.to_string())?;
+    // Compact (single-line) JSON: board.json is primarily machine-read by agents,
+    // so we drop pretty-printing to keep writes small and fast.
+    let json = serde_json::to_string(board).map_err(|e| e.to_string())?;
 
     // Write the serialized JSON to a sibling temp file in the same directory.
     let tmp_path = {

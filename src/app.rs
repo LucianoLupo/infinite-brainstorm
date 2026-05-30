@@ -110,6 +110,72 @@ pub(crate) async fn save_board_storage(board: &Board) {
     }
 }
 
+/// Trailing-edge debounce window for the persistence sink, in milliseconds.
+///
+/// Bursts of mutations (e.g. a drag emitting many intermediate states, or rapid
+/// keystrokes) are coalesced into a single disk write that fires this long after
+/// the last [`RequestSave::call`].
+const SAVE_DEBOUNCE_MS: u32 = 220;
+
+/// A `Copy` handle to the centralized, debounced persistence sink.
+///
+/// All mutation sites call [`RequestSave::call`] instead of invoking
+/// `save_board_storage` directly. Calls mark the board dirty and (re)arm a single
+/// trailing-edge timer; the actual write reads the latest board state at flush
+/// time, so coalesced bursts persist exactly the final state once.
+#[derive(Clone, Copy)]
+pub struct RequestSave {
+    // `Rc<dyn Fn()>` is `!Send`/`!Sync`, so it lives in thread-local arena storage
+    // (`LocalStorage`). This is sound in the single-threaded CSR/WASM runtime.
+    inner: StoredValue<Rc<dyn Fn()>, LocalStorage>,
+}
+
+impl RequestSave {
+    /// Mark the board dirty and (re)schedule the single trailing-edge write.
+    pub fn call(&self) {
+        let f = self.inner.get_value();
+        f();
+    }
+}
+
+/// Build the debounced persistence sink.
+///
+/// Returns a [`RequestSave`] whose every call cancels any pending timer and arms
+/// a fresh trailing-edge [`gloo_timers::callback::Timeout`]. When the timer fires
+/// it reads `board` untracked, persists it, and clears `local_edit_pending`.
+/// `local_edit_pending` is raised on every call so the file watcher (P1.4) can
+/// distinguish our own in-flight edits from genuine external changes.
+fn make_request_save(
+    board: ReadSignal<Board>,
+    local_edit_pending: RwSignal<bool>,
+) -> RequestSave {
+    // Holds the live timer so a subsequent call drops (cancels) it before arming
+    // a new one — this is what coalesces a burst into one write.
+    let pending: Rc<RefCell<Option<gloo_timers::callback::Timeout>>> =
+        Rc::new(RefCell::new(None));
+
+    let sink: Rc<dyn Fn()> = Rc::new(move || {
+        local_edit_pending.set(true);
+        let pending_for_timer = pending.clone();
+        let timeout = gloo_timers::callback::Timeout::new(SAVE_DEBOUNCE_MS, move || {
+            // Clear our own handle first so the closure can't keep the Timeout
+            // alive after it fires.
+            pending_for_timer.borrow_mut().take();
+            let current_board = board.get_untracked();
+            spawn_local(async move {
+                save_board_storage(&current_board).await;
+                local_edit_pending.set(false);
+            });
+        });
+        // Dropping the previous Timeout (if any) cancels it.
+        *pending.borrow_mut() = Some(timeout);
+    });
+
+    RequestSave {
+        inner: StoredValue::new_local(sink),
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct SaveBoardArgs {
     board: Board,
@@ -340,6 +406,12 @@ pub struct BoardCtx {
     /// Most recent board.json parse error (if any). Set on a failed load so the
     /// error banner can surface it; cleared on the next successful load.
     pub load_error: RwSignal<Option<String>>,
+    /// Centralized debounced persistence sink. Call this after mutating the board
+    /// signal instead of invoking `save_board_storage` directly.
+    pub request_save: RequestSave,
+    /// True while a debounced local write is queued or in flight. The file watcher
+    /// can check this to avoid reloading over the user's own pending edits.
+    pub local_edit_pending: RwSignal<bool>,
 }
 
 #[component]
@@ -385,6 +457,8 @@ pub fn App() -> impl IntoView {
     let (image_load_trigger, set_image_load_trigger) = signal(0u32);
     let (link_preview_trigger, set_link_preview_trigger) = signal(0u32);
     let load_error = RwSignal::<Option<String>>::new(None);
+    let local_edit_pending = RwSignal::<bool>::new(false);
+    let request_save = make_request_save(board, local_edit_pending);
 
     provide_context(BoardCtx {
         board,
@@ -405,6 +479,8 @@ pub fn App() -> impl IntoView {
         set_md_edit_text,
         md_file_cache,
         load_error,
+        request_save,
+        local_edit_pending,
     });
 
     // Load board on startup (with small delay to ensure Tauri is ready)
@@ -1003,10 +1079,7 @@ pub fn App() -> impl IntoView {
         if was_resizing {
             set_resize_state.set(ResizeState::default());
 
-            let current_board = board.get_untracked();
-            spawn_local(async move {
-                save_board_storage(&current_board).await;
-            });
+            request_save.call();
             return;
         }
 
@@ -1033,10 +1106,7 @@ pub fn App() -> impl IntoView {
                             });
                         });
 
-                        let current_board = board.get_untracked();
-                        spawn_local(async move {
-                            save_board_storage(&current_board).await;
-                        });
+                        request_save.call();
                     }
                 }
             }
@@ -1067,10 +1137,7 @@ pub fn App() -> impl IntoView {
         set_pan_state.set(PanState::default());
 
         if was_dragging {
-            let current_board = board.get_untracked();
-            spawn_local(async move {
-                save_board_storage(&current_board).await;
-            });
+            request_save.call();
         }
     }};
 
@@ -1152,10 +1219,7 @@ pub fn App() -> impl IntoView {
                 set_selected_nodes.set([new_id.clone()].into_iter().collect());
                 set_editing_node.set(Some(new_id));
 
-                let current_board = board.get_untracked();
-                spawn_local(async move {
-                    save_board_storage(&current_board).await;
-                });
+                request_save.call();
             }
         }
     };
@@ -1177,22 +1241,18 @@ pub fn App() -> impl IntoView {
                 if ev.shift_key() {
                     // Redo: Ctrl+Shift+Z / Cmd+Shift+Z
                     if let Some(new_board) = history.borrow_mut().redo(board.get_untracked()) {
-                        set_board.set(new_board.clone());
+                        set_board.set(new_board);
                         set_selected_nodes.set(HashSet::new());
                         set_selected_edge.set(None);
-                        spawn_local(async move {
-                            save_board_storage(&new_board).await;
-                        });
+                        request_save.call();
                     }
                 } else {
                     // Undo: Ctrl+Z / Cmd+Z
                     if let Some(new_board) = history.borrow_mut().undo(board.get_untracked()) {
-                        set_board.set(new_board.clone());
+                        set_board.set(new_board);
                         set_selected_nodes.set(HashSet::new());
                         set_selected_edge.set(None);
-                        spawn_local(async move {
-                            save_board_storage(&new_board).await;
-                        });
+                        request_save.call();
                     }
                 }
             }
@@ -1205,10 +1265,7 @@ pub fn App() -> impl IntoView {
                     });
                     set_selected_edge.set(None);
 
-                    let current_board = board.get_untracked();
-                    spawn_local(async move {
-                        save_board_storage(&current_board).await;
-                    });
+                    request_save.call();
                 } else if !selected.is_empty() {
                     // Collect image paths to delete from assets folder
                     let current_board = board.get_untracked();
@@ -1228,19 +1285,22 @@ pub fn App() -> impl IntoView {
                     });
                     set_selected_nodes.set(HashSet::new());
 
-                    let current_board = board.get_untracked();
-                    spawn_local(async move {
-                        // Delete asset files from disk (Tauri only)
-                        if is_tauri() {
-                            for path in image_paths_to_delete {
-                                #[derive(Serialize)]
-                                struct DeleteAssetArgs { path: String }
-                                let args = serde_wasm_bindgen::to_value(&DeleteAssetArgs { path: path.clone() }).unwrap();
-                                let _ = invoke("delete_asset", args).await;
+                    if image_paths_to_delete.is_empty() {
+                        request_save.call();
+                    } else {
+                        spawn_local(async move {
+                            // Delete asset files from disk (Tauri only)
+                            if is_tauri() {
+                                for path in image_paths_to_delete {
+                                    #[derive(Serialize)]
+                                    struct DeleteAssetArgs { path: String }
+                                    let args = serde_wasm_bindgen::to_value(&DeleteAssetArgs { path: path.clone() }).unwrap();
+                                    let _ = invoke("delete_asset", args).await;
+                                }
                             }
-                        }
-                        save_board_storage(&current_board).await;
-                    });
+                            request_save.call();
+                        });
+                    }
                 }
             }
             "c" if ev.meta_key() || ev.ctrl_key() => {
@@ -1299,10 +1359,7 @@ pub fn App() -> impl IntoView {
                         });
                         set_selected_nodes.set(new_ids);
 
-                        let current_board = board.get_untracked();
-                        spawn_local(async move {
-                            save_board_storage(&current_board).await;
-                        });
+                        request_save.call();
                     }
                 }
                 // If no internal clipboard, let ClipboardEvent fire for image paste
@@ -1319,10 +1376,7 @@ pub fn App() -> impl IntoView {
                         }
                     });
 
-                    let current_board = board.get_untracked();
-                    spawn_local(async move {
-                        save_board_storage(&current_board).await;
-                    });
+                    request_save.call();
                 }
             }
             "Escape" => {
@@ -1391,8 +1445,7 @@ pub fn App() -> impl IntoView {
                     });
                     set_selected_nodes.set([new_id].into_iter().collect());
 
-                    let current_board = board.get_untracked();
-                    save_board_storage(&current_board).await;
+                    request_save.call();
                 }
                 Err(e) => {
                     web_sys::console::error_1(&format!("Paste failed: {:?}", e).into());
@@ -1423,10 +1476,8 @@ pub fn App() -> impl IntoView {
             if let Ok(result) = reader_clone.result() {
                 if let Some(text) = result.as_string() {
                     if let Ok(parsed) = serde_json::from_str::<Board>(&text) {
-                        set_board.set(parsed.clone());
-                        spawn_local(async move {
-                            save_board_storage(&parsed).await;
-                        });
+                        set_board.set(parsed);
+                        request_save.call();
                     }
                 }
             }

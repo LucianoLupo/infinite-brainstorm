@@ -127,8 +127,10 @@ fn load_truncated_json_returns_err() {
 /// The committed golden fixture exercises every optional metadata field plus an
 /// edge label. We assert two things:
 /// 1. It round-trips through serde to an equal `Board`.
-/// 2. `write_board_atomic` re-serializes it *byte-identically* to the committed
-///    file — so the on-disk format the app writes stays pinned and reviewable.
+/// 2. `write_board_atomic` emits *compact* (single-line) JSON that re-parses to
+///    an equal `Board` — board.json is machine-read by agents, so the writer
+///    drops pretty-printing. The golden fixture itself stays human-readable for
+///    review; we compare semantics, not bytes, to the fixture.
 #[test]
 fn golden_fixture_round_trips_byte_identically() {
     let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -156,18 +158,24 @@ fn golden_fixture_round_trips_byte_identically() {
     let reserialized: Board = serde_json::from_str(&golden_text).unwrap();
     assert_eq!(board, reserialized);
 
-    // 2. Byte-identical write. `write_board_atomic` uses `to_string_pretty`
-    //    (2-space indent), matching the fixture's formatting. We compare against
-    //    the fixture text with a trailing newline trimmed (the writer emits no
-    //    trailing newline).
+    // 2. Compact write. `write_board_atomic` uses `to_string` (single line, no
+    //    indentation). Assert the bytes match the compact serialization of the
+    //    parsed board and re-parse to an equal `Board`, so the on-disk format the
+    //    app writes stays pinned and reviewable.
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("board.json");
     write_board_atomic(&out, &board).unwrap();
     let written = std::fs::read_to_string(&out).unwrap();
 
+    let expected_compact = serde_json::to_string(&board).unwrap();
     assert_eq!(
-        written,
-        golden_text.trim_end_matches('\n'),
-        "writer output must match the committed golden fixture byte-for-byte"
+        written, expected_compact,
+        "writer output must be compact single-line JSON"
     );
+    assert!(
+        !written.contains('\n'),
+        "compact writer output must not contain newlines"
+    );
+    let reread: Board = serde_json::from_str(&written).unwrap();
+    assert_eq!(reread, board, "compact write must round-trip to an equal Board");
 }

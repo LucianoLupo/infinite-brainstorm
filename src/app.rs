@@ -265,6 +265,11 @@ pub type Snapshot = (Board, HashSet<String>);
 /// lives behind `Rc<RefCell<..>>` rather than a signal.
 type BoardHistory = Rc<RefCell<History<Snapshot>>>;
 
+/// Holds the requestAnimationFrame render callback so it isn't dropped while the
+/// browser owns it. Stored behind `Rc<RefCell<..>>` so the closure can be set
+/// once and kept alive for the component's lifetime.
+type RenderClosure = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+
 /// `Copy` handle that routes every board mutation through one place.
 ///
 /// `apply` is the single entry point: it snapshots history exactly once, runs the
@@ -1553,7 +1558,7 @@ pub fn App() -> impl IntoView {
     // frame, so a burst of mutations within one frame collapses to one draw.
     let render_scheduled: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     // Holds the rAF callback so it isn't dropped while the browser owns it.
-    let render_closure: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+    let render_closure: RenderClosure = Rc::new(RefCell::new(None));
 
     {
         let render_scheduled = render_scheduled.clone();
@@ -2313,25 +2318,21 @@ pub fn App() -> impl IntoView {
                     );
                 }
             }
-            "c" if ev.meta_key() || ev.ctrl_key() => {
-                if !selected.is_empty() {
-                    let current_board = board.get_untracked();
-                    let copied_nodes: Vec<Node> = current_board
-                        .nodes
-                        .iter()
-                        .filter(|n| selected.contains(&n.id))
-                        .cloned()
-                        .collect();
-                    let copied_edges: Vec<Edge> = current_board
-                        .edges
-                        .iter()
-                        .filter(|e| {
-                            selected.contains(&e.from_node) && selected.contains(&e.to_node)
-                        })
-                        .cloned()
-                        .collect();
-                    set_node_clipboard.set(Some((copied_nodes, copied_edges)));
-                }
+            "c" if (ev.meta_key() || ev.ctrl_key()) && !selected.is_empty() => {
+                let current_board = board.get_untracked();
+                let copied_nodes: Vec<Node> = current_board
+                    .nodes
+                    .iter()
+                    .filter(|n| selected.contains(&n.id))
+                    .cloned()
+                    .collect();
+                let copied_edges: Vec<Edge> = current_board
+                    .edges
+                    .iter()
+                    .filter(|e| selected.contains(&e.from_node) && selected.contains(&e.to_node))
+                    .cloned()
+                    .collect();
+                set_node_clipboard.set(Some((copied_nodes, copied_edges)));
             }
             "v" if ev.meta_key() || ev.ctrl_key() => {
                 if let Some((ref nodes, ref edges)) = node_clipboard.get_untracked() {
@@ -2385,16 +2386,14 @@ pub fn App() -> impl IntoView {
                 }
                 // If no internal clipboard, let ClipboardEvent fire for image paste
             }
-            "t" | "T" => {
-                if !selected.is_empty() {
-                    // Tapping `T` repeatedly to land on a type coalesces into one
-                    // undo step rather than one-per-press.
-                    dispatch.apply_coalesced(
-                        BoardAction::CycleType(selected.into_iter().collect()),
-                        None,
-                        Some("cycle-type"),
-                    );
-                }
+            "t" | "T" if !selected.is_empty() => {
+                // Tapping `T` repeatedly to land on a type coalesces into one
+                // undo step rather than one-per-press.
+                dispatch.apply_coalesced(
+                    BoardAction::CycleType(selected.into_iter().collect()),
+                    None,
+                    Some("cycle-type"),
+                );
             }
             "a" | "A" if ev.meta_key() || ev.ctrl_key() => {
                 // Select all nodes (F103). Edge selection is mutually exclusive
@@ -2488,8 +2487,8 @@ pub fn App() -> impl IntoView {
                         .into(),
                     );
 
-                    let node_width = (paste_result.width as f64).min(400.0).max(100.0);
-                    let node_height = (paste_result.height as f64).min(400.0).max(100.0);
+                    let node_width = (paste_result.width as f64).clamp(100.0, 400.0);
+                    let node_height = (paste_result.height as f64).clamp(100.0, 400.0);
 
                     let new_node = Node {
                         id: uuid::Uuid::new_v4().to_string(),

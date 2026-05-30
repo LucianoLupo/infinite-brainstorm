@@ -144,7 +144,7 @@ pub fn Minimap() -> impl IntoView {
                     <canvas
                         node_ref=canvas_ref
                         style="width: 100%; height: 100%; display: block; cursor: pointer;"
-                        on:click=on_click.clone()
+                        on:click=on_click
                     />
                 </div>
             })

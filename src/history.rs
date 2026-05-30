@@ -1,44 +1,94 @@
+use std::collections::VecDeque;
+
+/// Optional tag describing the kind of edit a snapshot precedes. Successive
+/// snapshots sharing the same non-`None` kind coalesce into a single undo step
+/// (e.g. tapping `T` to cycle a node's type five times undoes in one stroke).
+///
+/// `None` (the default for one-shot actions) never coalesces, so distinct
+/// operations always remain separately undoable.
+pub type EditKind = Option<&'static str>;
+
 /// History stack for undo/redo functionality.
 /// Stores full state snapshots for simplicity.
+///
+/// Backed by [`VecDeque`] so trimming the oldest entry when `max_size` is
+/// exceeded is O(1) (`pop_front`) rather than the O(n) `Vec::remove(0)`.
 #[derive(Clone)]
 pub struct History<T: Clone> {
-    past: Vec<T>,
-    future: Vec<T>,
+    past: VecDeque<T>,
+    future: VecDeque<T>,
     max_size: usize,
+    /// Kind of the most recent `push` while still at the tip of the past stack.
+    /// Used to coalesce successive same-kind edits. Reset to `None` whenever the
+    /// timeline branches (undo/redo) so a coalesce never spans a navigation.
+    last_kind: EditKind,
 }
 
 impl<T: Clone> History<T> {
     pub fn new(max_size: usize) -> Self {
         Self {
-            past: Vec::new(),
-            future: Vec::new(),
+            past: VecDeque::new(),
+            future: VecDeque::new(),
             max_size,
+            last_kind: None,
         }
     }
 
-    /// Record a new state. Clears the redo stack.
+    /// Record a new state without coalescing. Clears the redo stack.
     pub fn push(&mut self, state: T) {
-        self.future.clear();
-        self.past.push(state);
+        self.push_kind(state, None);
+    }
 
-        // Trim oldest entries if we exceed max size
+    /// Record a new state tagged with an [`EditKind`]. Clears the redo stack.
+    ///
+    /// When `kind` is `Some` and equals the kind of the immediately preceding
+    /// push (and we're at the tip of the timeline), the new state is *not*
+    /// appended: the prior snapshot already captures the pre-edit state for the
+    /// whole run, so the run collapses to one undo step. `None` never coalesces.
+    pub fn push_kind(&mut self, state: T, kind: EditKind) {
+        // Coalesce: a same-kind run keeps only the snapshot taken before the run
+        // began. The redo stack is still cleared (a new edit invalidates redo).
+        let coalesce = kind.is_some() && kind == self.last_kind && !self.past.is_empty();
+
+        self.future.clear();
+        self.last_kind = kind;
+
+        if coalesce {
+            return;
+        }
+
+        self.past.push_back(state);
+
+        // Trim oldest entries if we exceed max size. O(1) per drop.
         while self.past.len() > self.max_size {
-            self.past.remove(0);
+            self.past.pop_front();
         }
     }
 
     /// Undo: move current to future, return previous state.
     pub fn undo(&mut self, current: T) -> Option<T> {
-        self.past.pop().map(|previous| {
-            self.future.push(current);
+        // A navigation breaks any coalescing run.
+        self.last_kind = None;
+        self.past.pop_back().map(|previous| {
+            self.future.push_back(current);
+            // Bound the redo stack the same way the undo stack is bounded, so a
+            // long undo run can't grow `future` without limit.
+            while self.future.len() > self.max_size {
+                self.future.pop_front();
+            }
             previous
         })
     }
 
     /// Redo: move current to past, return next state.
     pub fn redo(&mut self, current: T) -> Option<T> {
-        self.future.pop().map(|next| {
-            self.past.push(current);
+        // A navigation breaks any coalescing run.
+        self.last_kind = None;
+        self.future.pop_back().map(|next| {
+            self.past.push_back(current);
+            while self.past.len() > self.max_size {
+                self.past.pop_front();
+            }
             next
         })
     }
@@ -210,23 +260,43 @@ mod tests {
     }
 
     #[test]
-    fn future_stack_grows_on_repeated_undo() {
-        // Documents behavior: future stack is not trimmed by max_size
-        let mut history: History<i32> = History::new(3);
+    fn future_stack_is_bounded_by_max_size() {
+        // The redo stack is now bounded the same way the undo stack is, so a
+        // long undo run can't grow `future` without limit.
+        let mut history: History<i32> = History::new(2);
         history.push(1);
         history.push(2);
         history.push(3);
+        // past is bounded to [2,3] (1 was trimmed on push of 3).
 
-        // Undo all - future stack will have 3 items
-        history.undo(4);
-        history.undo(3);
-        history.undo(2);
+        history.undo(4); // future=[4], past=[2]
+        history.undo(3); // future=[4,3], past=[]
+        // Both undos succeeded since past had 2 entries.
 
-        // All 3 redos should work
+        // future holds 2 items (== max_size); both redos work.
+        assert!(history.can_redo());
+        assert_eq!(history.redo(2), Some(3));
+        assert_eq!(history.redo(3), Some(4));
+        assert!(!history.can_redo());
+    }
+
+    #[test]
+    fn future_never_exceeds_max_size_during_full_undo_run() {
+        // Drive the future stack up to exactly max_size by undoing every stored
+        // entry, and confirm it stays bounded (never larger than the past was).
+        let mut history: History<i32> = History::new(3);
+        history.push(1);
+        history.push(2);
+        history.push(3); // past=[1,2,3]
+        history.undo(4); // future=[4],   past=[1,2]
+        history.undo(3); // future=[4,3], past=[1]
+        history.undo(2); // future=[4,3,2], past=[]
+        // future holds 3 items (== max_size); all redos work, oldest preserved.
         assert!(history.can_redo());
         assert_eq!(history.redo(1), Some(2));
         assert_eq!(history.redo(2), Some(3));
         assert_eq!(history.redo(3), Some(4));
+        assert!(!history.can_redo());
     }
 
     #[test]
@@ -269,6 +339,70 @@ mod tests {
 
         // State should be exactly as after initial pushes
         assert!(history.can_undo());
+        assert!(!history.can_redo());
+    }
+
+    // --- Coalescing (push_kind) ---
+
+    #[test]
+    fn same_kind_run_coalesces_to_one_entry() {
+        let mut history: History<i32> = History::new(100);
+        // Snapshot of pre-edit state before each cycle press; all same kind.
+        history.push_kind(0, Some("cycle")); // captures state 0
+        history.push_kind(1, Some("cycle")); // coalesced (no new entry)
+        history.push_kind(2, Some("cycle")); // coalesced
+
+        // Only one undo step back to the pre-run snapshot (0).
+        assert_eq!(history.undo(3), Some(0));
+        assert!(!history.can_undo());
+    }
+
+    #[test]
+    fn different_kinds_do_not_coalesce() {
+        let mut history: History<i32> = History::new(100);
+        history.push_kind(0, Some("move"));
+        history.push_kind(1, Some("cycle"));
+
+        // Distinct kinds remain separately undoable.
+        assert_eq!(history.undo(2), Some(1));
+        assert_eq!(history.undo(1), Some(0));
+        assert!(!history.can_undo());
+    }
+
+    #[test]
+    fn none_kind_never_coalesces() {
+        let mut history: History<i32> = History::new(100);
+        history.push_kind(0, None);
+        history.push_kind(1, None);
+
+        assert_eq!(history.undo(2), Some(1));
+        assert_eq!(history.undo(1), Some(0));
+        assert!(!history.can_undo());
+    }
+
+    #[test]
+    fn navigation_breaks_coalesce_run() {
+        let mut history: History<i32> = History::new(100);
+        history.push_kind(0, Some("cycle")); // past=[0]
+        let _ = history.undo(1); // navigation resets last_kind; past=[], future=[1]
+        // A same-kind push after navigation must NOT coalesce into the (now empty) past.
+        history.push_kind(2, Some("cycle")); // past=[2], future cleared
+        history.push_kind(3, Some("cycle")); // coalesced into the same run
+
+        assert_eq!(history.undo(4), Some(2));
+        assert!(!history.can_undo());
+    }
+
+    #[test]
+    fn coalesce_still_clears_redo() {
+        let mut history: History<i32> = History::new(100);
+        history.push(1); // past=[1]
+        history.undo(2); // past=[], future=[2]
+        // First push of a kind establishes the run AND clears redo.
+        history.push_kind(3, Some("cycle"));
+        assert!(!history.can_redo());
+        // Subsequent coalesced push must also keep redo clear.
+        history.push_kind(4, Some("cycle"));
         assert!(!history.can_redo());
     }
 }

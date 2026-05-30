@@ -1,6 +1,6 @@
-use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache, RenderState};
+use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache, LoadState, RenderState, IMAGE_CACHE_CAP};
 use crate::components::{ErrorBanner, ImageModal, MarkdownModal, MarkdownOverlays, NodeEditor, SearchOverlay};
-use crate::history::History;
+use crate::history::{EditKind, History};
 use crate::interaction::{reduce, BoardAction, SideEffect};
 use crate::state::{Board, Camera, Edge, LinkPreview, Node, NodeType, ResizeHandle, RESIZE_HANDLE_SIZE, MIN_NODE_WIDTH, MIN_NODE_HEIGHT};
 use leptos::prelude::*;
@@ -8,7 +8,7 @@ use leptos::task::spawn_local;
 use pulldown_cmark::{html, Event, Parser};
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -289,8 +289,15 @@ impl Dispatcher {
     /// a junk undo entry. [`apply`](Self::apply) calls it internally for one-shot
     /// actions.
     pub fn snapshot(&self) {
+        self.snapshot_kind(None);
+    }
+
+    /// Like [`snapshot`](Self::snapshot) but tags the entry with an [`EditKind`]
+    /// so successive same-kind edits (e.g. repeated type-cycling) coalesce into a
+    /// single undo step inside [`History`].
+    pub fn snapshot_kind(&self, kind: EditKind) {
         let snap = (self.board.get_untracked(), self.selected_nodes.get_untracked());
-        self.history.get_value().borrow_mut().push(snap);
+        self.history.get_value().borrow_mut().push_kind(snap, kind);
     }
 
     /// Run the side effects a [`reduce`] call produced.
@@ -353,6 +360,19 @@ impl Dispatcher {
     /// to leave selection untouched.
     pub fn apply(&self, action: BoardAction, new_selection: Option<HashSet<String>>) {
         self.snapshot();
+        self.commit(action, new_selection);
+    }
+
+    /// Like [`apply`](Self::apply) but coalesces with the immediately preceding
+    /// same-`kind` call, so a run of identical operations (e.g. tapping `T` to
+    /// cycle a node's type repeatedly) collapses to a single undo step.
+    pub fn apply_coalesced(
+        &self,
+        action: BoardAction,
+        new_selection: Option<HashSet<String>>,
+        kind: EditKind,
+    ) {
+        self.snapshot_kind(kind);
         self.commit(action, new_selection);
     }
 
@@ -480,6 +500,82 @@ pub(crate) fn parse_markdown(md: &str) -> String {
     let mut html_output = String::new();
     html::push_html(&mut html_output, parser);
     html_output
+}
+
+/// Record a freshly decoded image in the cache and enforce the LRU bound.
+///
+/// `lru` is the insertion-order key log; the newly loaded `url` is appended (and
+/// any earlier occurrence removed so it isn't double-counted). If the number of
+/// `Loaded` entries exceeds [`IMAGE_CACHE_CAP`], the least-recently inserted keys
+/// that are **not** referenced by `live_urls` (currently on the board) are
+/// dropped. On-board images are always kept regardless of age so visible nodes
+/// never lose their picture.
+fn insert_loaded_image(
+    cache: &ImageCache,
+    lru: &Rc<RefCell<VecDeque<String>>>,
+    url: String,
+    img: HtmlImageElement,
+    live_urls: &HashSet<String>,
+) {
+    {
+        let mut order = lru.borrow_mut();
+        order.retain(|k| k != &url);
+        order.push_back(url.clone());
+    }
+    cache.borrow_mut().insert(url, LoadState::Loaded(img));
+
+    // Decide which keys to evict using the pure helper, then apply.
+    let loaded_keys: HashSet<String> = cache
+        .borrow()
+        .iter()
+        .filter(|(_, v)| matches!(v, LoadState::Loaded(_)))
+        .map(|(k, _)| k.clone())
+        .collect();
+
+    let victims = {
+        let order = lru.borrow();
+        plan_lru_eviction(&order, &loaded_keys, live_urls, IMAGE_CACHE_CAP)
+    };
+
+    if victims.is_empty() {
+        return;
+    }
+    {
+        let mut cache_mut = cache.borrow_mut();
+        for v in &victims {
+            cache_mut.remove(v);
+        }
+    }
+    lru.borrow_mut().retain(|k| !victims.contains(k));
+}
+
+/// Pure LRU eviction planner: given the insertion-order `order` log, the set of
+/// `loaded_keys` (entries actually holding a decoded image), the `live_urls`
+/// currently on the board (never evicted), and the soft `cap`, return the keys to
+/// drop — the oldest loaded, non-live entries — so the loaded count returns to
+/// `cap`. Side-effect-free and host-testable (no `HtmlImageElement` needed).
+fn plan_lru_eviction(
+    order: &VecDeque<String>,
+    loaded_keys: &HashSet<String>,
+    live_urls: &HashSet<String>,
+    cap: usize,
+) -> HashSet<String> {
+    let loaded_count = loaded_keys.len();
+    let mut victims = HashSet::new();
+    if loaded_count <= cap {
+        return victims;
+    }
+    let mut to_evict = loaded_count - cap;
+    for key in order {
+        if to_evict == 0 {
+            break;
+        }
+        if !live_urls.contains(key) && loaded_keys.contains(key) {
+            victims.insert(key.clone());
+            to_evict -= 1;
+        }
+    }
+    victims
 }
 
 /// Check if a path points to a local .md file (not HTTP URL)
@@ -748,7 +844,7 @@ pub struct EditingCtx {
     pub set_modal_md: WriteSignal<Option<(String, bool)>>,
     pub md_edit_text: ReadSignal<String>,
     pub set_md_edit_text: WriteSignal<String>,
-    pub md_file_cache: ReadSignal<HashMap<String, Option<String>>>,
+    pub md_file_cache: ReadSignal<HashMap<String, LoadState<String>>>,
     /// Most recent board.json parse error (if any). Set on a failed load so the
     /// error banner can surface it; cleared on the next successful load.
     pub load_error: RwSignal<Option<String>>,
@@ -823,11 +919,19 @@ pub fn App() -> impl IntoView {
     let image_cache_for_load = image_cache.clone();
     let image_cache_for_link_preview = image_cache.clone();
     let image_cache_for_modal = image_cache.clone();
+    let image_cache_for_evict = image_cache.clone();
+    // Insertion-order log of image-cache keys, used to evict the least-recently
+    // inserted decoded image when the cache exceeds IMAGE_CACHE_CAP (LRU bound).
+    let image_lru: Rc<RefCell<VecDeque<String>>> = Rc::new(RefCell::new(VecDeque::new()));
+    let image_lru_for_load = image_lru.clone();
+    let image_lru_for_link_preview = image_lru.clone();
+    let image_lru_for_evict = image_lru.clone();
     let link_preview_cache: LinkPreviewCache = Rc::new(RefCell::new(HashMap::new()));
     let link_preview_cache_for_render = link_preview_cache.clone();
     let link_preview_cache_for_fetch = link_preview_cache.clone();
+    let link_preview_cache_for_evict = link_preview_cache.clone();
     // Markdown file cache stored as a signal (for local .md files in link nodes)
-    let (md_file_cache, set_md_file_cache) = signal::<HashMap<String, Option<String>>>(HashMap::new());
+    let (md_file_cache, set_md_file_cache) = signal::<HashMap<String, LoadState<String>>>(HashMap::new());
     let (image_load_trigger, set_image_load_trigger) = signal(0u32);
     let (link_preview_trigger, set_link_preview_trigger) = signal(0u32);
     let load_error = RwSignal::<Option<String>>::new(None);
@@ -994,6 +1098,7 @@ pub fn App() -> impl IntoView {
     // Image loading effect
     Effect::new({
         let image_cache = image_cache_for_load.clone();
+        let image_lru = image_lru_for_load.clone();
         move || {
             let current_board = board.get();
 
@@ -1009,9 +1114,10 @@ pub fn App() -> impl IntoView {
                     if needs_load {
                         // Mark as loading
                         web_sys::console::log_1(&format!("Loading image: {}", url).into());
-                        image_cache.borrow_mut().insert(url.clone(), None);
+                        image_cache.borrow_mut().insert(url.clone(), LoadState::Loading);
 
                         let cache_for_async = image_cache.clone();
+                        let lru_for_async = image_lru.clone();
                         let url_for_async = url.clone();
                         let trigger = set_image_load_trigger;
 
@@ -1042,14 +1148,24 @@ pub fn App() -> impl IntoView {
                             let img = HtmlImageElement::new().unwrap();
                             let url_for_closure = url_for_async.clone();
                             let cache_for_onload = cache_for_async.clone();
+                            let lru_for_onload = lru_for_async.clone();
 
                             let onload_ref = Closure::wrap(Box::new({
                                 let img = img.clone();
                                 let cache = cache_for_onload.clone();
+                                let lru = lru_for_onload.clone();
                                 let url = url_for_closure.clone();
                                 move || {
                                     web_sys::console::log_1(&format!("Image loaded successfully: {}", url).into());
-                                    cache.borrow_mut().insert(url.clone(), Some(img.clone()));
+                                    // Live image URLs (on-board) are exempt from LRU eviction.
+                                    let live_urls: HashSet<String> = board
+                                        .get_untracked()
+                                        .nodes
+                                        .iter()
+                                        .filter(|n| n.node_type == NodeType::Image)
+                                        .map(|n| n.text.clone())
+                                        .collect();
+                                    insert_loaded_image(&cache, &lru, url.clone(), img.clone(), &live_urls);
                                     trigger.update(|n| *n = n.wrapping_add(1));
                                 }
                             }) as Box<dyn Fn()>);
@@ -1058,9 +1174,16 @@ pub fn App() -> impl IntoView {
                             onload_ref.forget();
 
                             let onerror = Closure::wrap(Box::new({
+                                let cache = cache_for_async.clone();
                                 let url = url_for_async.clone();
+                                let trigger = set_image_load_trigger;
                                 move || {
                                     web_sys::console::error_1(&format!("Image load FAILED: {}", url).into());
+                                    // Mark Failed (distinct from Loading) so the node shows
+                                    // an error instead of a perpetual spinner, and the load
+                                    // effect won't re-fetch until the entry is evicted.
+                                    cache.borrow_mut().insert(url.clone(), LoadState::Failed);
+                                    trigger.update(|n| *n = n.wrapping_add(1));
                                 }
                             }) as Box<dyn Fn()>);
 
@@ -1079,6 +1202,7 @@ pub fn App() -> impl IntoView {
     Effect::new({
         let link_cache = link_preview_cache_for_fetch.clone();
         let image_cache = image_cache_for_link_preview.clone();
+        let image_lru = image_lru_for_link_preview.clone();
         move || {
             let current_board = board.get();
 
@@ -1103,10 +1227,11 @@ pub fn App() -> impl IntoView {
 
                     if needs_fetch {
                         // Mark as loading
-                        link_cache.borrow_mut().insert(url.clone(), None);
+                        link_cache.borrow_mut().insert(url.clone(), LoadState::Loading);
 
                         let cache_for_result = link_cache.clone();
                         let image_cache_for_result = image_cache.clone();
+                        let image_lru_for_result = image_lru.clone();
                         let trigger = set_link_preview_trigger;
                         let img_trigger = set_image_load_trigger;
 
@@ -1124,29 +1249,57 @@ pub fn App() -> impl IntoView {
                                     };
 
                                     if needs_img_load {
-                                        image_cache_for_result.borrow_mut().insert(img_url.clone(), None);
+                                        image_cache_for_result.borrow_mut().insert(img_url.clone(), LoadState::Loading);
 
                                         let img = HtmlImageElement::new().unwrap();
                                         let cache_for_onload = image_cache_for_result.clone();
+                                        let lru_for_onload = image_lru_for_result.clone();
                                         let url_for_closure = img_url.clone();
 
                                         let onload = Closure::wrap(Box::new({
                                             let img = img.clone();
                                             let cache = cache_for_onload.clone();
+                                            let lru = lru_for_onload.clone();
                                             let url = url_for_closure.clone();
                                             move || {
-                                                cache.borrow_mut().insert(url.clone(), Some(img.clone()));
+                                                // OG preview images aren't node.text, so none
+                                                // are "live" for LRU purposes; the cap applies.
+                                                let live_urls: HashSet<String> = board
+                                                    .get_untracked()
+                                                    .nodes
+                                                    .iter()
+                                                    .filter(|n| n.node_type == NodeType::Image)
+                                                    .map(|n| n.text.clone())
+                                                    .collect();
+                                                insert_loaded_image(&cache, &lru, url.clone(), img.clone(), &live_urls);
+                                                img_trigger.update(|n| *n = n.wrapping_add(1));
+                                            }
+                                        }) as Box<dyn Fn()>);
+
+                                        let onerror = Closure::wrap(Box::new({
+                                            let cache = cache_for_onload.clone();
+                                            let url = url_for_closure.clone();
+                                            move || {
+                                                cache.borrow_mut().insert(url.clone(), LoadState::Failed);
                                                 img_trigger.update(|n| *n = n.wrapping_add(1));
                                             }
                                         }) as Box<dyn Fn()>);
 
                                         img.set_onload(Some(onload.as_ref().unchecked_ref()));
                                         onload.forget();
+                                        img.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+                                        onerror.forget();
                                         img.set_src(&img_url);
                                     }
                                 }
 
-                                cache_for_result.borrow_mut().insert(url, Some(preview));
+                                cache_for_result.borrow_mut().insert(url, LoadState::Loaded(preview));
+                                trigger.update(|n| *n = n.wrapping_add(1));
+                            } else {
+                                // Preview fetch failed (backend error / SSRF block / bad data):
+                                // mark Failed so the node falls back to the raw URL instead of
+                                // spinning, and won't auto-refetch until evicted.
+                                cache_for_result.borrow_mut().insert(url, LoadState::Failed);
                                 trigger.update(|n| *n = n.wrapping_add(1));
                             }
                         });
@@ -1168,20 +1321,89 @@ pub fn App() -> impl IntoView {
                 if !current_cache.contains_key(&path) {
                     // Mark as loading
                     set_md_file_cache.update(|c| {
-                        c.insert(path.clone(), None);
+                        c.insert(path.clone(), LoadState::Loading);
                     });
 
                     spawn_local(async move {
                         let args = serde_wasm_bindgen::to_value(&ReadMarkdownFileArgs { path: path.clone() }).unwrap();
                         let result = invoke("read_markdown_file", args).await;
 
-                        let content = result.as_string();
+                        // A non-string result means the backend read failed; record
+                        // Failed (distinct from Loading) so the overlay shows an error
+                        // instead of a permanent spinner. Evicting the entry retries.
+                        let state = match result.as_string() {
+                            Some(content) => LoadState::Loaded(content),
+                            None => LoadState::Failed,
+                        };
                         set_md_file_cache.update(|c| {
-                            c.insert(path, content);
+                            c.insert(path, state);
                         });
                     });
                 }
             }
+        }
+    });
+
+    // Cache-eviction effect: when nodes are added/removed, drop cache entries no
+    // longer referenced by any node so the image/link/md caches (and the LRU log)
+    // can't accumulate orphaned entries for the lifetime of the session.
+    Effect::new({
+        let image_cache = image_cache_for_evict.clone();
+        let image_lru = image_lru_for_evict.clone();
+        let link_cache = link_preview_cache_for_evict.clone();
+        move || {
+            let current_board = board.get();
+
+            // URLs/paths currently referenced by board nodes, partitioned by the
+            // cache that owns them.
+            let mut live_link_urls: HashSet<String> = HashSet::new();
+            let mut live_image_urls: HashSet<String> = HashSet::new();
+            let mut live_md_paths: HashSet<String> = HashSet::new();
+            for node in &current_board.nodes {
+                match node.node_type {
+                    NodeType::Image => {
+                        live_image_urls.insert(node.text.clone());
+                    }
+                    NodeType::Link if is_local_md_file(&node.text) => {
+                        live_md_paths.insert(node.text.clone());
+                    }
+                    NodeType::Link => {
+                        live_link_urls.insert(node.text.clone());
+                    }
+                    _ => {}
+                }
+            }
+
+            // Evict link-preview entries whose link node is gone. Before dropping,
+            // keep the OG-image URLs of *surviving* previews so they aren't culled
+            // from the image cache below.
+            {
+                let mut link = link_cache.borrow_mut();
+                link.retain(|url, _| live_link_urls.contains(url));
+                for state in link.values() {
+                    if let LoadState::Loaded(preview) = state {
+                        if let Some(img_url) = &preview.image {
+                            live_image_urls.insert(img_url.clone());
+                        }
+                    }
+                }
+            }
+
+            // Evict image entries that are neither an image node's source nor an
+            // OG image of a surviving preview, and prune the LRU log to match.
+            {
+                image_cache
+                    .borrow_mut()
+                    .retain(|url, _| live_image_urls.contains(url));
+                image_lru
+                    .borrow_mut()
+                    .retain(|url| live_image_urls.contains(url));
+            }
+
+            // Evict local-.md cache entries whose link node is gone.
+            set_md_file_cache.update(|c| {
+                c.retain(|path, _| live_md_paths.contains(path));
+            });
         }
     });
 
@@ -1817,7 +2039,7 @@ pub fn App() -> impl IntoView {
                 if node.node_type == NodeType::Image {
                     // Open image in modal - get src from cached HtmlImageElement
                     let cache = image_cache_for_modal.borrow();
-                    if let Some(Some(img)) = cache.get(&node.text) {
+                    if let Some(img) = cache.get(&node.text).and_then(LoadState::loaded) {
                         set_modal_image.set(Some(img.src()));
                     }
                 } else if node.node_type == NodeType::Md {
@@ -1962,9 +2184,12 @@ pub fn App() -> impl IntoView {
             }
             "t" | "T" => {
                 if !selected.is_empty() {
-                    dispatch.apply(
+                    // Tapping `T` repeatedly to land on a type coalesces into one
+                    // undo step rather than one-per-press.
+                    dispatch.apply_coalesced(
                         BoardAction::CycleType(selected.into_iter().collect()),
                         None,
+                        Some("cycle-type"),
                     );
                 }
             }
@@ -2185,6 +2410,73 @@ pub fn App() -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod plan_lru_eviction_tests {
+        use super::*;
+
+        fn order(keys: &[&str]) -> VecDeque<String> {
+            keys.iter().map(|s| s.to_string()).collect()
+        }
+        fn set(keys: &[&str]) -> HashSet<String> {
+            keys.iter().map(|s| s.to_string()).collect()
+        }
+
+        #[test]
+        fn under_cap_evicts_nothing() {
+            let o = order(&["a", "b"]);
+            let loaded = set(&["a", "b"]);
+            let live = set(&[]);
+            assert!(plan_lru_eviction(&o, &loaded, &live, 4).is_empty());
+        }
+
+        #[test]
+        fn at_cap_evicts_nothing() {
+            let o = order(&["a", "b", "c"]);
+            let loaded = set(&["a", "b", "c"]);
+            assert!(plan_lru_eviction(&o, &loaded, &set(&[]), 3).is_empty());
+        }
+
+        #[test]
+        fn over_cap_evicts_oldest_first() {
+            // 4 loaded, cap 2 -> evict 2 oldest by insertion order.
+            let o = order(&["a", "b", "c", "d"]);
+            let loaded = set(&["a", "b", "c", "d"]);
+            let victims = plan_lru_eviction(&o, &loaded, &set(&[]), 2);
+            assert_eq!(victims, set(&["a", "b"]));
+        }
+
+        #[test]
+        fn live_urls_are_never_evicted() {
+            // Oldest "a" is on-board, so eviction skips it and takes the next
+            // oldest non-live entry instead.
+            let o = order(&["a", "b", "c", "d"]);
+            let loaded = set(&["a", "b", "c", "d"]);
+            let live = set(&["a"]);
+            let victims = plan_lru_eviction(&o, &loaded, &live, 2);
+            assert_eq!(victims, set(&["b", "c"]));
+            assert!(!victims.contains("a"));
+        }
+
+        #[test]
+        fn only_loaded_entries_are_evicted() {
+            // "b" is still loading (not in loaded_keys); it must not be chosen.
+            let o = order(&["a", "b", "c", "d"]);
+            let loaded = set(&["a", "c", "d"]); // 3 loaded, cap 1 -> evict 2
+            let victims = plan_lru_eviction(&o, &loaded, &set(&[]), 1);
+            assert_eq!(victims, set(&["a", "c"]));
+            assert!(!victims.contains("b"));
+        }
+
+        #[test]
+        fn all_live_cannot_reduce_below_cap() {
+            // Every loaded entry is on-board: nothing can be evicted even though
+            // we're over cap. Visible images always win over the soft cap.
+            let o = order(&["a", "b", "c"]);
+            let loaded = set(&["a", "b", "c"]);
+            let live = set(&["a", "b", "c"]);
+            assert!(plan_lru_eviction(&o, &loaded, &live, 1).is_empty());
+        }
+    }
 
     mod load_outcome_tests {
         use super::*;

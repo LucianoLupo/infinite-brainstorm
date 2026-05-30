@@ -2,7 +2,7 @@ use crate::app::is_local_md_file;
 use crate::state::{
     truncate_filename, Board, Camera, LinkPreview, Node, NodeType, RESIZE_HANDLE_SIZE,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
@@ -33,8 +33,103 @@ const GROUP_BORDER: &str = "rgba(50, 170, 85, 0.25)";
 const GROUP_LABEL_COLOR: &str = "#448855";
 const FONT: &str = "JetBrains Mono, Fira Code, Consolas, monospace";
 
-pub type ImageCache = Rc<RefCell<HashMap<String, Option<HtmlImageElement>>>>;
-pub type LinkPreviewCache = Rc<RefCell<HashMap<String, Option<LinkPreview>>>>;
+/// Tri-state for an async-loaded cache entry. Replaces the previous
+/// `Option<T>` (where `None` ambiguously meant "loading") so a load *failure*
+/// is distinct from a load *in progress*: a failed entry stops re-fetching on
+/// every render (no spin loop) yet can be evicted and retried, and the renderer
+/// can show a real error instead of a perpetual "Loading…".
+#[derive(Clone)]
+pub enum LoadState<T> {
+    /// Fetch issued, result not yet available.
+    Loading,
+    /// Fetch succeeded with this value.
+    Loaded(T),
+    /// Fetch failed; entry is terminal until evicted (e.g. node deleted or URL
+    /// changed), at which point it will be retried.
+    Failed,
+}
+
+impl<T> LoadState<T> {
+    /// The loaded value, if any.
+    pub fn loaded(&self) -> Option<&T> {
+        match self {
+            LoadState::Loaded(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
+pub type ImageCache = Rc<RefCell<HashMap<String, LoadState<HtmlImageElement>>>>;
+pub type LinkPreviewCache = Rc<RefCell<HashMap<String, LoadState<LinkPreview>>>>;
+
+/// Soft cap on the number of decoded images kept in [`ImageCache`]. When a fresh
+/// image finishes loading and the cache is over this size, the least-recently
+/// inserted entry that is *not* currently on the board is evicted. Bounds memory
+/// for boards that cycle through many image URLs over a session.
+pub const IMAGE_CACHE_CAP: usize = 64;
+
+/// Identity of a wrapped-text layout. Wrapping is a pure function of the text,
+/// the wrap width, and the font size — all three are captured here so identical
+/// frames (e.g. during a pan, where nothing but the camera offset changes) reuse
+/// the previously computed line breaks instead of re-measuring every word.
+///
+/// `width` and `font_px` are bucketed to whole pixels (`u32`) so sub-pixel
+/// camera jitter doesn't thrash the cache, and `node_id` lets us evict a node's
+/// entry when it is deleted.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct WrapKey {
+    node_id: String,
+    text: String,
+    width: u32,
+    font_px: u32,
+}
+
+thread_local! {
+    /// Memoized wrapped-text layouts. Pruned to the live node set once per render
+    /// pass (see [`prune_wrap_cache`]) so it cannot grow without bound.
+    static WRAP_CACHE: RefCell<HashMap<WrapKey, Rc<Vec<String>>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Drop wrapped-text cache entries whose owning node is no longer on the board.
+/// Called once per [`render_board`] pass before any node is drawn.
+fn prune_wrap_cache(live_ids: &HashSet<&str>) {
+    WRAP_CACHE.with(|c| {
+        c.borrow_mut()
+            .retain(|k, _| live_ids.contains(k.node_id.as_str()));
+    });
+}
+
+/// [`wrap_text`] with memoization keyed on `(node_id, text, width, font_px)`.
+///
+/// The caller must have already set `ctx`'s font to `font_px` (as `draw_node`
+/// does) so a cache *miss* measures with the same font the key records. On a hit
+/// no `measure_text` calls happen at all — the dominant cost of a pan frame for
+/// text-heavy boards.
+fn wrap_text_cached(
+    ctx: &CanvasRenderingContext2d,
+    node_id: &str,
+    text: &str,
+    max_width: f64,
+    font_px: u32,
+) -> Rc<Vec<String>> {
+    let key = WrapKey {
+        node_id: node_id.to_string(),
+        text: text.to_string(),
+        width: max_width.max(0.0).round() as u32,
+        font_px,
+    };
+
+    if let Some(hit) = WRAP_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+
+    let lines = Rc::new(wrap_text(ctx, text, max_width));
+    WRAP_CACHE.with(|c| {
+        c.borrow_mut().insert(key, lines.clone());
+    });
+    lines
+}
 
 /// Extra screen-space margin (px) kept around the canvas when culling, so that
 /// nodes/edges straddling the viewport edge (and their shadows, arrowheads, and
@@ -127,6 +222,13 @@ pub fn render_board(state: RenderState) {
     draw_groups(ctx, board, camera);
 
     let node_map: HashMap<&str, &Node> = board.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    // Evict wrapped-text cache entries for nodes that no longer exist before any
+    // drawing happens, keeping the memo bounded to the live board.
+    {
+        let live_ids: HashSet<&str> = node_map.keys().copied().collect();
+        prune_wrap_cache(&live_ids);
+    }
 
     for edge in &board.edges {
         if edge_outside_viewport(&node_map, edge, camera, width, height) {
@@ -293,8 +395,11 @@ fn draw_node(
         NodeType::Text | NodeType::Idea | NodeType::Note | NodeType::Unknown => {
             if !is_editing {
                 ctx.set_fill_style_str(if is_selected { TEXT_COLOR } else { TEXT_DIM });
-                let font_size = (12.0 * camera.zoom).max(8.0);
-                ctx.set_font(&format!("{}px {}", font_size, FONT));
+                // Bucket the font size to a whole pixel; this is both the rendered
+                // font and the wrap-cache key dimension, so identical buckets reuse
+                // the cached line breaks.
+                let font_px = (12.0 * camera.zoom).max(8.0).round() as u32;
+                set_font_px(ctx, font_px);
 
                 let padding = 8.0 * camera.zoom;
                 let label_height = 16.0 * camera.zoom;
@@ -302,9 +407,12 @@ fn draw_node(
                 let text_y = screen_y + label_height + (screen_height - label_height) / 2.0;
                 let max_width = screen_width - 2.0 * padding;
                 let max_height = screen_height - label_height - padding;
-                let line_height = font_size * 1.4;
+                let line_height = font_px as f64 * 1.4;
 
-                draw_wrapped_text(ctx, &node.text, text_x, text_y, max_width, max_height, line_height);
+                draw_wrapped_text(
+                    ctx, &node.id, &node.text, text_x, text_y, max_width, max_height,
+                    line_height, font_px,
+                );
             }
         }
     }
@@ -369,7 +477,7 @@ fn draw_image_content(
     let cache = image_cache.borrow();
 
     match cache.get(url) {
-        Some(Some(img)) => {
+        Some(LoadState::Loaded(img)) => {
             // Image is loaded, draw it
             let padding = 4.0 * camera.zoom;
             let label_height = 16.0 * camera.zoom;
@@ -408,14 +516,23 @@ fn draw_image_content(
             ctx.set_text_baseline("top");
             let _ = ctx.fill_text(&truncated, screen_x + screen_width - 4.0 * camera.zoom, screen_y + 4.0 * camera.zoom);
         }
-        Some(None) => {
-            // Image is loading
+        Some(LoadState::Loading) => {
+            // Image fetch in progress
             ctx.set_fill_style_str(TEXT_DIM);
             let font_size = (12.0 * camera.zoom).max(8.0);
             ctx.set_font(&format!("{}px {}", font_size, FONT));
             ctx.set_text_align("center");
             ctx.set_text_baseline("middle");
             let _ = ctx.fill_text("Loading...", screen_x + screen_width / 2.0, screen_y + screen_height / 2.0);
+        }
+        Some(LoadState::Failed) => {
+            // Fetch failed — distinct from loading so the user sees the error.
+            ctx.set_fill_style_str(TEXT_DIM);
+            let font_size = (12.0 * camera.zoom).max(8.0);
+            ctx.set_font(&format!("{}px {}", font_size, FONT));
+            ctx.set_text_align("center");
+            ctx.set_text_baseline("middle");
+            let _ = ctx.fill_text("[Image failed]", screen_x + screen_width / 2.0, screen_y + screen_height / 2.0);
         }
         None => {
             // Image not in cache yet, show placeholder
@@ -460,11 +577,11 @@ fn draw_link_content(
     ctx.clip();
 
     match cache.get(url) {
-        Some(Some(preview)) => {
+        Some(LoadState::Loaded(preview)) => {
             // Draw preview image - OG images usually contain title/desc already
             if let Some(ref image_url) = preview.image {
                 let img_cache = image_cache.borrow();
-                if let Some(Some(img)) = img_cache.get(image_url) {
+                if let Some(LoadState::Loaded(img)) = img_cache.get(image_url) {
                     let natural_w = img.natural_width() as f64;
                     let natural_h = img.natural_height() as f64;
 
@@ -495,7 +612,7 @@ fn draw_link_content(
             ctx.set_text_baseline("bottom");
             let _ = ctx.fill_text(&domain, screen_x + screen_width - padding, content_bottom);
         }
-        Some(None) => {
+        Some(LoadState::Loading) => {
             ctx.set_fill_style_str(TEXT_DIM);
             let font_size = (12.0 * camera.zoom).max(8.0);
             ctx.set_font(&format!("{}px {}", font_size, FONT));
@@ -503,7 +620,9 @@ fn draw_link_content(
             ctx.set_text_baseline("middle");
             let _ = ctx.fill_text("Loading...", screen_x + screen_width / 2.0, screen_y + screen_height / 2.0);
         }
-        None => {
+        // Failed preview or not-yet-fetched: fall back to showing the raw URL so
+        // the node is still useful (and a failed link doesn't show a stale spinner).
+        Some(LoadState::Failed) | None => {
             ctx.set_fill_style_str(TEXT_DIM);
             let font_size = (10.0 * camera.zoom).max(7.0);
             ctx.set_font(&format!("{}px {}", font_size, FONT));
@@ -751,22 +870,28 @@ fn wrap_text(ctx: &CanvasRenderingContext2d, text: &str, max_width: f64) -> Vec<
     lines
 }
 
-/// Draw wrapped text centered in a box
+/// Draw wrapped text centered in a box. Uses the memoized [`wrap_text_cached`],
+/// so a frame that doesn't change a node's text/width/zoom does no word
+/// measurement at all.
+#[allow(clippy::too_many_arguments)]
 fn draw_wrapped_text(
     ctx: &CanvasRenderingContext2d,
+    node_id: &str,
     text: &str,
     center_x: f64,
     center_y: f64,
     max_width: f64,
     max_height: f64,
     line_height: f64,
+    font_px: u32,
 ) {
-    let lines = wrap_text(ctx, text, max_width);
+    let lines = wrap_text_cached(ctx, node_id, text, max_width, font_px);
 
     // Clamp to available height
     let visible_lines = ((max_height / line_height).floor() as usize).max(1);
-    let lines_to_draw: Vec<_> = lines.into_iter().take(visible_lines).collect();
-    let actual_height = lines_to_draw.len() as f64 * line_height;
+    let lines_to_draw = lines.iter().take(visible_lines);
+    let drawn_count = lines.len().min(visible_lines);
+    let actual_height = drawn_count as f64 * line_height;
 
     // Start Y position to center the text block
     let start_y = center_y - actual_height / 2.0 + line_height / 2.0;
@@ -774,10 +899,32 @@ fn draw_wrapped_text(
     ctx.set_text_align("center");
     ctx.set_text_baseline("middle");
 
-    for (i, line) in lines_to_draw.iter().enumerate() {
+    for (i, line) in lines_to_draw.enumerate() {
         let y = start_y + i as f64 * line_height;
         let _ = ctx.fill_text(line, center_x, y);
     }
+}
+
+thread_local! {
+    /// Caches the last `"<px>px <FONT>"` string set via [`set_font_px`]. The font
+    /// string only changes when the bucketed pixel size changes (i.e. on zoom),
+    /// so a pan frame builds zero font strings even across many nodes.
+    static LAST_FONT_PX: Cell<u32> = const { Cell::new(0) };
+    static LAST_FONT_STR: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// Set the canvas font to `<font_px>px <FONT>`, reusing the previously-built
+/// string when the pixel size is unchanged from the last call. Hoists the
+/// per-node `format!` out of the hot path: within a frame every text node shares
+/// the same bucketed size, so the string is formatted at most once per zoom level.
+fn set_font_px(ctx: &CanvasRenderingContext2d, font_px: u32) {
+    let unchanged = LAST_FONT_PX.with(|p| p.get() == font_px);
+    if !unchanged {
+        let s = format!("{}px {}", font_px, FONT);
+        LAST_FONT_PX.with(|p| p.set(font_px));
+        LAST_FONT_STR.with(|f| *f.borrow_mut() = s);
+    }
+    LAST_FONT_STR.with(|f| ctx.set_font(&f.borrow()));
 }
 
 pub fn get_canvas_context(

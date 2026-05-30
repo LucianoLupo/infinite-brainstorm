@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use crate::app::{BoardDataCtx, EditingCtx, is_local_md_file, parse_markdown};
+use crate::canvas::LoadState;
 use crate::interaction::BoardAction;
 use crate::state::NodeType;
 
@@ -144,10 +145,11 @@ pub fn MarkdownModal() -> impl IntoView {
                                         .find(|n| n.id == nid)
                                         .map(|n| {
                                             if n.node_type == NodeType::Link && is_local_md_file(&n.text) {
-                                                md_cache_content
-                                                    .get(&n.text)
-                                                    .and_then(|opt: &Option<String>| opt.clone())
-                                                    .unwrap_or_else(|| "Loading...".to_string())
+                                                match md_cache_content.get(&n.text) {
+                                                    Some(LoadState::Loaded(c)) => c.clone(),
+                                                    Some(LoadState::Failed) => "*Failed to load file.*".to_string(),
+                                                    _ => "Loading...".to_string(),
+                                                }
                                             } else {
                                                 n.text.clone()
                                             }

@@ -243,6 +243,93 @@ fn get_assets_dir(app: &AppHandle) -> PathBuf {
     parent.join("assets")
 }
 
+/// Maximum byte size for an image we will base64-encode and hand to the
+/// webview. Guards against memory exhaustion / DoS via a crafted board.json
+/// pointing at a huge file.
+const MAX_IMAGE_BYTES: u64 = 25 * 1024 * 1024; // 25 MB
+
+/// Expand `~`, strip a `file://` prefix, and URL-decode an input path string
+/// into a concrete filesystem path. Shared by the file-reading commands so
+/// their accepted path syntax stays consistent.
+fn expand_path(path: &str) -> PathBuf {
+    let expanded = if let Some(rest) = path.strip_prefix('~') {
+        match dirs::home_dir() {
+            Some(home) => home.join(rest.trim_start_matches('/')).to_string_lossy().into_owned(),
+            None => path.to_string(),
+        }
+    } else if let Some(stripped) = path.strip_prefix("file://") {
+        urlencoding::decode(stripped)
+            .map(|s| s.into_owned())
+            .unwrap_or_else(|_| stripped.to_string())
+    } else {
+        path.to_string()
+    };
+    PathBuf::from(expanded)
+}
+
+/// Resolve `input` to a canonical path and reject it unless it lives inside one
+/// of `allowed_roots`. Canonicalization (which also resolves `..` and symlinks)
+/// is what stops path-traversal exfiltration: a crafted board.json pointing at
+/// `/etc/passwd`, `~/.ssh/id_rsa`, or `<board-dir>/../../secret` resolves to a
+/// path that does not start with any allowed root, so we return `Err`.
+fn scope_path(input: &str, allowed_roots: &[PathBuf]) -> Result<PathBuf, String> {
+    let expanded = expand_path(input);
+
+    let canonical = expanded
+        .canonicalize()
+        .map_err(|_| format!("File not found: {}", expanded.display()))?;
+
+    let in_scope = allowed_roots.iter().any(|root| {
+        root.canonicalize()
+            .map(|r| canonical.starts_with(&r))
+            .unwrap_or(false)
+    });
+
+    if !in_scope {
+        return Err("Access denied: path is outside the allowed directories".to_string());
+    }
+
+    Ok(canonical)
+}
+
+/// The directory that holds the active `board.json`. Local images and assets
+/// referenced by the board are scoped to live inside this directory.
+fn board_dir(app: &AppHandle) -> PathBuf {
+    let board_path = get_board_path(app);
+    board_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Sniff the leading magic bytes of `data` and return the matching image MIME
+/// type, or `None` if the content is not a supported image format. We trust the
+/// file *content*, not its extension — a crafted board.json can rename
+/// `/etc/passwd` to `evil.png`, but its bytes won't match any signature here.
+fn sniff_image_mime(data: &[u8]) -> Option<&'static str> {
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Some("image/png");
+    }
+    // JPEG: FF D8 FF
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    // GIF: "GIF87a" or "GIF89a"
+    if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    // WebP: "RIFF" .... "WEBP"
+    if data.len() >= 12 && data.starts_with(b"RIFF") && &data[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    // BMP: "BM"
+    if data.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    None
+}
+
 fn ensure_assets_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let assets_dir = get_assets_dir(app);
     if !assets_dir.exists() {
@@ -258,31 +345,31 @@ pub struct PasteImageResult {
     pub height: u32,
 }
 
-#[tauri::command]
-fn read_image_base64(path: String) -> Result<String, String> {
-    let path = PathBuf::from(&path);
+/// Validate, read, and base64-encode an image. Pure (no AppHandle) so it can be
+/// unit-tested: the caller passes the directories the path is allowed to live in.
+fn read_image_base64_scoped(path: &str, allowed_roots: &[PathBuf]) -> Result<String, String> {
+    // Reject any path that resolves outside the allowed roots (path traversal,
+    // absolute paths to system files, etc.).
+    let canonical = scope_path(path, allowed_roots)?;
 
-    if !path.exists() {
-        return Err(format!("File not found: {}", path.display()));
+    // Cap file size BEFORE reading the bytes into memory.
+    let meta = fs::metadata(&canonical)
+        .map_err(|e| format!("Failed to stat file: {}", e))?;
+    if meta.len() > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "Image too large: {} bytes (max {} bytes)",
+            meta.len(),
+            MAX_IMAGE_BYTES
+        ));
     }
 
-    let data = fs::read(&path)
+    let data = fs::read(&canonical)
         .map_err(|e| format!("Failed to read file: {}", e))?;
 
-    // Detect MIME type from extension
-    let ext = path.extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png")
-        .to_lowercase();
-
-    let mime = match ext.as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        _ => "image/png",
-    };
+    // Derive MIME from detected magic bytes, not the file extension. Reject any
+    // file whose content is not a supported image format.
+    let mime = sniff_image_mime(&data)
+        .ok_or_else(|| "Unsupported or non-image file content".to_string())?;
 
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     let b64 = STANDARD.encode(&data);
@@ -291,24 +378,38 @@ fn read_image_base64(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn read_markdown_file(path: String) -> Result<String, String> {
-    // Expand ~ to home directory, strip file:// prefix, and URL-decode
-    let expanded = if path.starts_with('~') {
-        dirs::home_dir()
-            .map(|h| path.replacen('~', &h.to_string_lossy(), 1))
-            .unwrap_or(path)
-    } else if path.starts_with("file://") {
-        let stripped = path.strip_prefix("file://").unwrap_or(&path);
-        // URL-decode the path (handles %20 for spaces, etc.)
-        urlencoding::decode(stripped)
-            .map(|s| s.into_owned())
-            .unwrap_or_else(|_| stripped.to_string())
-    } else {
-        path
-    };
+fn read_image_base64(app: AppHandle, path: String) -> Result<String, String> {
+    read_image_base64_scoped(&path, &[board_dir(&app)])
+}
 
-    std::fs::read_to_string(&expanded)
-        .map_err(|e| format!("Failed to read {}: {}", expanded, e))
+/// Validate and read a local Markdown file. Pure (no AppHandle) so it can be
+/// unit-tested. Only `.md` files inside an allowed root are readable — this both
+/// preserves the Obsidian-vault integration (vault files live under `$HOME`) and
+/// blocks exfiltration of non-Markdown system files like `/etc/passwd` or
+/// `~/.ssh/id_rsa`.
+fn read_markdown_file_scoped(path: &str, allowed_roots: &[PathBuf]) -> Result<String, String> {
+    let canonical = scope_path(path, allowed_roots)?;
+
+    let is_md = canonical
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+        .unwrap_or(false);
+    if !is_md {
+        return Err("Access denied: only .md files can be read".to_string());
+    }
+
+    std::fs::read_to_string(&canonical)
+        .map_err(|e| format!("Failed to read {}: {}", canonical.display(), e))
+}
+
+#[tauri::command]
+fn read_markdown_file(app: AppHandle, path: String) -> Result<String, String> {
+    let mut roots = vec![board_dir(&app)];
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home);
+    }
+    read_markdown_file_scoped(&path, &roots)
 }
 
 #[tauri::command]
@@ -915,6 +1016,11 @@ mod tests {
     mod read_markdown_file_tests {
         use super::*;
 
+        // Allowed root for tests = the canonical system temp dir.
+        fn temp_roots() -> Vec<PathBuf> {
+            vec![std::env::temp_dir()]
+        }
+
         #[test]
         fn reads_absolute_path() {
             let dir = std::env::temp_dir();
@@ -922,7 +1028,7 @@ mod tests {
             let content = "# Test\nHello world";
             std::fs::write(&path, content).unwrap();
 
-            let result = read_markdown_file(path.to_string_lossy().to_string());
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &temp_roots());
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
 
@@ -937,7 +1043,7 @@ mod tests {
             std::fs::write(&path, content).unwrap();
 
             let file_url = format!("file://{}", path.to_string_lossy());
-            let result = read_markdown_file(file_url);
+            let result = read_markdown_file_scoped(&file_url, &temp_roots());
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
 
@@ -958,7 +1064,7 @@ mod tests {
                 "file://{}",
                 path.to_string_lossy().replace(' ', "%20")
             );
-            let result = read_markdown_file(encoded_path);
+            let result = read_markdown_file_scoped(&encoded_path, &temp_roots());
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
 
@@ -976,7 +1082,7 @@ mod tests {
             let content = "# Home test";
             std::fs::write(&test_file, content).unwrap();
 
-            let result = read_markdown_file("~/.brainstorm_test_temp.md".to_string());
+            let result = read_markdown_file_scoped("~/.brainstorm_test_temp.md", &[home]);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
 
@@ -985,9 +1091,8 @@ mod tests {
 
         #[test]
         fn returns_error_for_nonexistent_file() {
-            let result = read_markdown_file("/nonexistent/path/to/file.md".to_string());
+            let result = read_markdown_file_scoped("/nonexistent/path/to/file.md", &temp_roots());
             assert!(result.is_err());
-            assert!(result.unwrap_err().contains("Failed to read"));
         }
 
         #[test]
@@ -997,7 +1102,7 @@ mod tests {
             let content = "# Unicode Test\n日本語 中文 한국어 🎉";
             std::fs::write(&path, content).unwrap();
 
-            let result = read_markdown_file(path.to_string_lossy().to_string());
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &temp_roots());
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
 
@@ -1010,7 +1115,7 @@ mod tests {
             let path = dir.join("test_empty.md");
             std::fs::write(&path, "").unwrap();
 
-            let result = read_markdown_file(path.to_string_lossy().to_string());
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &temp_roots());
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), "");
 
@@ -1036,12 +1141,164 @@ mod tests {
                     .replace('(', "%28")
                     .replace(')', "%29")
             );
-            let result = read_markdown_file(encoded_path);
+            let result = read_markdown_file_scoped(&encoded_path, &temp_roots());
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
 
             std::fs::remove_file(&path).ok();
             std::fs::remove_dir(&subdir).ok();
+        }
+
+        #[test]
+        fn rejects_md_file_outside_allowed_roots() {
+            // A .md file that exists but lives outside the allowed roots is denied.
+            let dir = std::env::temp_dir();
+            let path = dir.join("test_outside_scope.md");
+            std::fs::write(&path, "# secret").unwrap();
+
+            // Allowed root is an unrelated subdirectory, NOT the temp dir itself.
+            let other_root = dir.join("brainstorm_unrelated_root");
+            std::fs::create_dir_all(&other_root).ok();
+
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &[other_root.clone()]);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().contains("Access denied"));
+
+            std::fs::remove_file(&path).ok();
+            std::fs::remove_dir(&other_root).ok();
+        }
+
+        #[test]
+        fn rejects_non_md_file_inside_allowed_roots() {
+            // Even inside an allowed root, a non-.md file (e.g. an imitation of a
+            // system secret) is rejected by the extension guard.
+            let dir = std::env::temp_dir();
+            let path = dir.join("test_secret_creds.txt");
+            std::fs::write(&path, "topsecret").unwrap();
+
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &temp_roots());
+            assert!(result.is_err());
+            assert!(result.unwrap_err().contains("only .md"));
+
+            std::fs::remove_file(&path).ok();
+        }
+    }
+
+    mod path_scope_tests {
+        use super::*;
+
+        #[test]
+        fn rejects_etc_passwd_for_image_read() {
+            // /etc/passwd is outside any board dir and not image bytes anyway.
+            let dir = std::env::temp_dir();
+            let board = dir.join("brainstorm_board_scope_a");
+            std::fs::create_dir_all(&board).ok();
+
+            let result = read_image_base64_scoped("/etc/passwd", &[board.clone()]);
+            assert!(result.is_err(), "/etc/passwd must be rejected");
+
+            std::fs::remove_dir(&board).ok();
+        }
+
+        #[test]
+        fn rejects_ssh_key_for_markdown_read() {
+            let home = dirs::home_dir().unwrap();
+            // ~/.ssh/id_rsa: even if it existed under the home root, it is not a
+            // .md file, so the extension guard rejects it. And on machines where
+            // it doesn't exist, canonicalize fails first. Either way -> Err.
+            let result = read_markdown_file_scoped("~/.ssh/id_rsa", &[home]);
+            assert!(result.is_err(), "~/.ssh/id_rsa must be rejected");
+        }
+
+        #[test]
+        fn rejects_path_traversal_escape() {
+            // A path that climbs out of the board dir via `..` must be rejected
+            // because canonicalization resolves it outside the allowed root.
+            let dir = std::env::temp_dir();
+            let board = dir.join("brainstorm_board_scope_b");
+            std::fs::create_dir_all(&board).ok();
+
+            // Create a real .md file OUTSIDE the board dir, then reference it via ..
+            let secret = dir.join("brainstorm_outside_secret.md");
+            std::fs::write(&secret, "# leak").unwrap();
+
+            let traversal = format!("{}/../brainstorm_outside_secret.md", board.to_string_lossy());
+            let result = read_markdown_file_scoped(&traversal, &[board.clone()]);
+            assert!(result.is_err(), "traversal escape must be rejected");
+
+            std::fs::remove_file(&secret).ok();
+            std::fs::remove_dir(&board).ok();
+        }
+
+        #[test]
+        fn allows_image_inside_board_dir() {
+            // A real PNG inside the board dir is accepted and base64-encoded.
+            let dir = std::env::temp_dir();
+            let board = dir.join("brainstorm_board_scope_c");
+            std::fs::create_dir_all(&board).ok();
+
+            // Minimal valid PNG magic-byte header (signature is enough for sniffing).
+            let png_sig = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01];
+            let img = board.join("pic.png");
+            std::fs::write(&img, png_sig).unwrap();
+
+            let result = read_image_base64_scoped(&img.to_string_lossy(), &[board.clone()]);
+            assert!(result.is_ok(), "board-dir image should load: {:?}", result);
+            assert!(result.unwrap().starts_with("data:image/png;base64,"));
+
+            std::fs::remove_file(&img).ok();
+            std::fs::remove_dir(&board).ok();
+        }
+
+        #[test]
+        fn rejects_non_image_content_with_image_extension() {
+            // A text file renamed to .png is rejected by magic-byte sniffing.
+            let dir = std::env::temp_dir();
+            let board = dir.join("brainstorm_board_scope_d");
+            std::fs::create_dir_all(&board).ok();
+
+            let fake = board.join("evil.png");
+            std::fs::write(&fake, b"root:x:0:0:root:/root:/bin/bash\n").unwrap();
+
+            let result = read_image_base64_scoped(&fake.to_string_lossy(), &[board.clone()]);
+            assert!(result.is_err(), "non-image content must be rejected");
+            assert!(result.unwrap_err().contains("non-image"));
+
+            std::fs::remove_file(&fake).ok();
+            std::fs::remove_dir(&board).ok();
+        }
+
+        #[test]
+        fn rejects_oversized_image() {
+            let dir = std::env::temp_dir();
+            let board = dir.join("brainstorm_board_scope_e");
+            std::fs::create_dir_all(&board).ok();
+
+            // Write a file larger than the cap. Start with a PNG signature so the
+            // size check (which runs first) is unambiguously what rejects it.
+            let big = board.join("huge.png");
+            let mut data = vec![0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+            data.resize((MAX_IMAGE_BYTES + 1) as usize, 0u8);
+            std::fs::write(&big, &data).unwrap();
+
+            let result = read_image_base64_scoped(&big.to_string_lossy(), &[board.clone()]);
+            assert!(result.is_err(), "oversized image must be rejected");
+            assert!(result.unwrap_err().contains("too large"));
+
+            std::fs::remove_file(&big).ok();
+            std::fs::remove_dir(&board).ok();
+        }
+
+        #[test]
+        fn sniff_detects_supported_formats() {
+            assert_eq!(sniff_image_mime(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Some("image/png"));
+            assert_eq!(sniff_image_mime(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
+            assert_eq!(sniff_image_mime(b"GIF89a..."), Some("image/gif"));
+            assert_eq!(sniff_image_mime(b"GIF87a..."), Some("image/gif"));
+            assert_eq!(sniff_image_mime(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+            assert_eq!(sniff_image_mime(b"BM\0\0"), Some("image/bmp"));
+            assert_eq!(sniff_image_mime(b"not an image"), None);
+            assert_eq!(sniff_image_mime(&[]), None);
         }
     }
 }

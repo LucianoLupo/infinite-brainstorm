@@ -14,6 +14,18 @@ edition = "2021"
 name = "infinite_brainstorm_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Release profile: size-optimized binary with full LTO, single codegen unit,
+# stripped symbols, and abort-on-panic. NOTE: Cargo only honors `[profile.*]`
+# from the workspace ROOT manifest, so this block is mirrored there (and is what
+# actually takes effect); it is duplicated here for documentation/standalone-
+# build parity. Release-only — dev/test profiles still unwind, so tests run.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

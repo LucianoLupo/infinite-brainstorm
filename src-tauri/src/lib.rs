@@ -35,16 +35,30 @@ fn content_hash(content: &str) -> u64 {
 
 pub use brainstorm_types::{Board, Edge, LinkPreview, Node, NodeType};
 
-fn get_board_path(_app: &AppHandle) -> PathBuf {
+/// Resolve the path to the active `board.json`, anchored on the process's
+/// current working directory.
+///
+/// We deliberately hard-error if `current_dir()` fails instead of silently
+/// falling back to `"."`: a relative `"."` would resolve against whatever
+/// directory the process happens to be in, which (when cwd is unavailable) is
+/// undefined — risking reads/writes of the wrong board, or scoping checks
+/// against the wrong root. A clear error is safer than a silent wrong path.
+///
+/// Takes no `AppHandle`: the path is derived purely from the cwd, so the handle
+/// was unused. Callers that need it for a Tauri command propagate the `Err` to
+/// the frontend; setup-time callers log and degrade.
+fn get_board_path() -> Result<PathBuf, String> {
     // Use parent of src-tauri (project root) during dev, or current dir in production
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Cannot determine current directory: {e}"))?;
 
     // If we're in src-tauri, go up one level to project root
-    if cwd.ends_with("src-tauri") {
+    let path = if cwd.ends_with("src-tauri") {
         cwd.parent().unwrap_or(&cwd).join("board.json")
     } else {
         cwd.join("board.json")
-    }
+    };
+    Ok(path)
 }
 
 /// Pure IO core for loading a board from a concrete path. Kept free of
@@ -66,8 +80,8 @@ pub fn load_board_at(path: &std::path::Path) -> Result<Board, String> {
 }
 
 #[tauri::command]
-fn load_board(app: AppHandle) -> Result<Board, String> {
-    let path = get_board_path(&app);
+fn load_board() -> Result<Board, String> {
+    let path = get_board_path()?;
     load_board_at(&path)
 }
 
@@ -147,14 +161,14 @@ pub fn write_board_atomic(path: &std::path::Path, board: &Board) -> Result<(), S
 }
 
 #[tauri::command]
-fn save_board(app: AppHandle, board: Board) -> Result<(), String> {
-    let path = get_board_path(&app);
+fn save_board(board: Board) -> Result<(), String> {
+    let path = get_board_path()?;
     write_board_atomic(&path, &board)
 }
 
 #[tauri::command]
-fn get_board_path_cmd(app: AppHandle) -> Result<String, String> {
-    let path = get_board_path(&app);
+fn get_board_path_cmd() -> Result<String, String> {
+    let path = get_board_path()?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -378,10 +392,10 @@ async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
     })
 }
 
-fn get_assets_dir(app: &AppHandle) -> PathBuf {
-    let board_path = get_board_path(app);
-    let parent = board_path.parent().unwrap_or(&board_path);
-    parent.join("assets")
+fn get_assets_dir() -> Result<PathBuf, String> {
+    let board_path = get_board_path()?;
+    let parent = board_path.parent().unwrap_or(&board_path).to_path_buf();
+    Ok(parent.join("assets"))
 }
 
 /// Maximum byte size for an image we will base64-encode and hand to the
@@ -435,12 +449,12 @@ fn scope_path(input: &str, allowed_roots: &[PathBuf]) -> Result<PathBuf, String>
 
 /// The directory that holds the active `board.json`. Local images and assets
 /// referenced by the board are scoped to live inside this directory.
-fn board_dir(app: &AppHandle) -> PathBuf {
-    let board_path = get_board_path(app);
-    board_path
+fn board_dir() -> Result<PathBuf, String> {
+    let board_path = get_board_path()?;
+    Ok(board_path
         .parent()
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("."))
+        .unwrap_or_else(|| PathBuf::from(".")))
 }
 
 /// Sniff the leading magic bytes of `data` and return the matching image MIME
@@ -471,8 +485,8 @@ fn sniff_image_mime(data: &[u8]) -> Option<&'static str> {
     None
 }
 
-fn ensure_assets_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let assets_dir = get_assets_dir(app);
+fn ensure_assets_dir() -> Result<PathBuf, String> {
+    let assets_dir = get_assets_dir()?;
     if !assets_dir.exists() {
         fs::create_dir_all(&assets_dir).map_err(|e| format!("Failed to create assets dir: {}", e))?;
     }
@@ -519,8 +533,8 @@ fn read_image_base64_scoped(path: &str, allowed_roots: &[PathBuf]) -> Result<Str
 }
 
 #[tauri::command]
-fn read_image_base64(app: AppHandle, path: String) -> Result<String, String> {
-    read_image_base64_scoped(&path, &[board_dir(&app)])
+fn read_image_base64(path: String) -> Result<String, String> {
+    read_image_base64_scoped(&path, &[board_dir()?])
 }
 
 /// Validate and read a local Markdown file. Pure (no AppHandle) so it can be
@@ -545,8 +559,8 @@ fn read_markdown_file_scoped(path: &str, allowed_roots: &[PathBuf]) -> Result<St
 }
 
 #[tauri::command]
-fn read_markdown_file(app: AppHandle, path: String) -> Result<String, String> {
-    let mut roots = vec![board_dir(&app)];
+fn read_markdown_file(path: String) -> Result<String, String> {
+    let mut roots = vec![board_dir()?];
     if let Some(home) = dirs::home_dir() {
         roots.push(home);
     }
@@ -554,12 +568,16 @@ fn read_markdown_file(app: AppHandle, path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn delete_asset(_app: AppHandle, path: String) -> Result<(), String> {
+fn delete_asset(path: String) -> Result<(), String> {
     let file_path = PathBuf::from(&path);
 
-    // Only allow deleting files in the assets folder (safety check)
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let assets_dir = cwd.join("assets");
+    // Only allow deleting files in the assets folder (safety check). Derive the
+    // assets dir from the SAME source paste_image writes to (get_assets_dir,
+    // anchored on the board.json directory) rather than re-deriving from cwd.join
+    // ("assets"): the two could diverge (e.g. running from src-tauri resolves the
+    // board to the project root) and a cwd-anchored check would wrongly reject —
+    // or, worse, wrongly accept — a delete.
+    let assets_dir = get_assets_dir()?;
 
     // Canonicalize paths to prevent path traversal attacks
     let canonical_file = file_path.canonicalize()
@@ -593,7 +611,7 @@ fn paste_image(app: AppHandle) -> Result<PasteImageResult, String> {
 
         // Generate unique filename
         let filename = format!("{}.png", uuid::Uuid::new_v4());
-        let assets_dir = ensure_assets_dir(&app)?;
+        let assets_dir = ensure_assets_dir()?;
         let dest_path = assets_dir.join(&filename);
 
         // Save as PNG
@@ -631,7 +649,7 @@ fn paste_image(app: AppHandle) -> Result<PasteImageResult, String> {
 
                 // Copy to assets folder
                 let filename = format!("{}.png", uuid::Uuid::new_v4());
-                let assets_dir = ensure_assets_dir(&app)?;
+                let assets_dir = ensure_assets_dir()?;
                 let dest_path = assets_dir.join(&filename);
 
                 // Save as PNG to normalize format
@@ -697,91 +715,145 @@ pub fn is_self_write(disk_hash: u64, last_self: Option<u64>) -> bool {
     last_self == Some(disk_hash)
 }
 
+/// Build a `notify` watcher on the parent directory of `board_path`. Returns the
+/// watcher (kept alive by the caller so the channel stays open) and the receiver.
+/// Any failure is surfaced as `Err(String)` rather than panicking, so the caller
+/// can log it, warn the UI, and retry instead of taking down the watcher thread.
+fn build_watcher(
+    board_path: &std::path::Path,
+) -> Result<(RecommendedWatcher, std::sync::mpsc::Receiver<notify::Result<notify::Event>>), String> {
+    let (tx, rx) = channel();
+
+    let mut watcher: RecommendedWatcher = Watcher::new(
+        tx,
+        Config::default().with_poll_interval(Duration::from_millis(500)),
+    )
+    .map_err(|e| format!("Failed to create watcher: {e}"))?;
+
+    if let Some(parent) = board_path.parent() {
+        watcher
+            .watch(parent, RecursiveMode::NonRecursive)
+            .map_err(|e| format!("Failed to watch directory {}: {e}", parent.display()))?;
+    }
+
+    Ok((watcher, rx))
+}
+
+/// How long to wait before re-establishing the watch after it goes down (either
+/// the initial setup failed or the receiver channel broke).
+const WATCHER_RETRY_DELAY: Duration = Duration::from_secs(2);
+
 fn setup_file_watcher(app: AppHandle) {
-    let board_path = get_board_path(&app);
+    // If we can't even resolve the board path (cwd unavailable), there's nothing
+    // to watch. Warn the UI so it can surface "file sync is down" rather than
+    // panicking the setup thread or silently leaving sync dead.
+    let board_path = match get_board_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("File watcher setup failed: {e}");
+            let _ = app.emit("watcher-down", e);
+            return;
+        }
+    };
     // Don't create board.json here - let user create it by adding nodes
 
     std::thread::spawn(move || {
-        let (tx, rx) = channel();
-
-        let mut watcher: RecommendedWatcher = Watcher::new(
-            tx,
-            Config::default().with_poll_interval(Duration::from_millis(500)),
-        )
-        .expect("Failed to create watcher");
-
-        if let Some(parent) = board_path.parent() {
-            watcher
-                .watch(parent, RecursiveMode::NonRecursive)
-                .expect("Failed to watch directory");
-        }
-
-        // Debounce: track last emit time to avoid multiple emissions for one save
+        // Debounce: track last emit time to avoid multiple emissions for one save.
+        // Persisted across watcher re-establishments so a reconnect doesn't reset
+        // the debounce window mid-save.
         let mut last_emit: Option<std::time::Instant> = None;
         let debounce_duration = Duration::from_millis(500);
 
+        // Outer loop: (re-)establish the watch and run the event loop. We only
+        // break out of an inner event loop on a channel error, then fall through
+        // to here, warn the UI, back off, and rebuild — so a transient watcher
+        // failure degrades gracefully instead of permanently killing file sync.
         loop {
-            match rx.recv() {
-                Ok(event) => {
-                    if let Ok(event) = event {
-                        let is_board_file = event.paths.iter().any(|p| {
-                            p.file_name()
-                                .map(|n| n == "board.json")
-                                .unwrap_or(false)
-                        });
+            let (_watcher, rx) = match build_watcher(&board_path) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    // Couldn't establish the watch. Log, warn the UI so it can
+                    // surface "file sync is down", back off, and retry rather
+                    // than panicking the thread and silently losing sync.
+                    eprintln!("File watcher setup failed: {e}");
+                    let _ = app.emit("watcher-down", e);
+                    std::thread::sleep(WATCHER_RETRY_DELAY);
+                    continue;
+                }
+            };
 
-                        if is_board_file {
-                            match event.kind {
-                                notify::EventKind::Modify(_) | notify::EventKind::Create(_) => {
-                                    // Fingerprint the bytes on disk and compare against the
-                                    // hash of our own last write. A match means this event is
-                                    // the app's own save — skip emitting (no reload loop). A
-                                    // mismatch (or unreadable file mid-rename) is treated as an
-                                    // external edit and reloads. The hash check is read-only and
-                                    // idempotent, so the surplus events a single atomic rename
-                                    // fans out into are all suppressed, not just the first.
-                                    let is_own_save = match fs::read_to_string(&board_path) {
-                                        Ok(content) => {
-                                            let last_self = *LAST_SELF_WRITE_HASH
-                                                .lock()
-                                                .unwrap_or_else(|p| p.into_inner());
-                                            is_self_write(content_hash(&content), last_self)
+            // Inner event loop. `_watcher` is held in scope here so the channel
+            // stays open; dropping it (on `break`) closes the channel cleanly
+            // before we rebuild.
+            loop {
+                match rx.recv() {
+                    Ok(event) => {
+                        if let Ok(event) = event {
+                            let is_board_file = event.paths.iter().any(|p| {
+                                p.file_name().map(|n| n == "board.json").unwrap_or(false)
+                            });
+
+                            if is_board_file {
+                                match event.kind {
+                                    notify::EventKind::Modify(_) | notify::EventKind::Create(_) => {
+                                        // Fingerprint the bytes on disk and compare against the
+                                        // hash of our own last write. A match means this event is
+                                        // the app's own save — skip emitting (no reload loop). A
+                                        // mismatch (or unreadable file mid-rename) is treated as an
+                                        // external edit and reloads. The hash check is read-only and
+                                        // idempotent, so the surplus events a single atomic rename
+                                        // fans out into are all suppressed, not just the first.
+                                        let is_own_save = match fs::read_to_string(&board_path) {
+                                            Ok(content) => {
+                                                let last_self = *LAST_SELF_WRITE_HASH
+                                                    .lock()
+                                                    .unwrap_or_else(|p| p.into_inner());
+                                                is_self_write(content_hash(&content), last_self)
+                                            }
+                                            // Couldn't read (e.g. transient state during the rename
+                                            // swap): err toward reloading rather than swallowing a
+                                            // real external change.
+                                            Err(_) => false,
+                                        };
+
+                                        let now = std::time::Instant::now();
+
+                                        if should_emit_change(
+                                            is_own_save,
+                                            last_emit,
+                                            now,
+                                            debounce_duration,
+                                        ) {
+                                            last_emit = Some(now);
+                                            std::thread::sleep(Duration::from_millis(100));
+                                            let _ = app.emit("board-changed", ());
+                                        } else if is_own_save {
+                                            // Record the timestamp even when we suppress our own
+                                            // save, so a trailing duplicate notify event arriving
+                                            // just after is debounced rather than slipping through
+                                            // (the file hash now matches, but defense in depth).
+                                            last_emit = Some(now);
                                         }
-                                        // Couldn't read (e.g. transient state during the rename
-                                        // swap): err toward reloading rather than swallowing a
-                                        // real external change.
-                                        Err(_) => false,
-                                    };
-
-                                    let now = std::time::Instant::now();
-
-                                    if should_emit_change(
-                                        is_own_save,
-                                        last_emit,
-                                        now,
-                                        debounce_duration,
-                                    ) {
-                                        last_emit = Some(now);
-                                        std::thread::sleep(Duration::from_millis(100));
-                                        let _ = app.emit("board-changed", ());
-                                    } else if is_own_save {
-                                        // Record the timestamp even when we suppress our own
-                                        // save, so a trailing duplicate notify event arriving
-                                        // just after is debounced rather than slipping through
-                                        // (the file hash now matches, but defense in depth).
-                                        last_emit = Some(now);
                                     }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
                     }
-                }
-                Err(e) => {
-                    eprintln!("Watch error: {:?}", e);
-                    break;
+                    Err(e) => {
+                        // The sender side dropped / the channel broke. Instead of
+                        // killing the watcher thread permanently (the old
+                        // `break`-out-of-everything behavior), warn the UI, drop
+                        // this watcher (closing its channel), back off, and let
+                        // the outer loop re-establish the watch.
+                        eprintln!("Watch channel error: {e:?}");
+                        let _ = app.emit("watcher-down", format!("watch channel closed: {e}"));
+                        break;
+                    }
                 }
             }
+
+            std::thread::sleep(WATCHER_RETRY_DELAY);
         }
     });
 }

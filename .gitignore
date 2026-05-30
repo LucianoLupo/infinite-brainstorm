@@ -29,7 +29,8 @@ Desktop.ini
 
 # Rust
 **/*.rs.bk
-Cargo.lock
+# Cargo.lock is committed: this workspace builds binaries/apps, so a pinned
+# lockfile gives reproducible CI + local builds. Do not re-add an ignore here.
 
 # Tauri
 /src-tauri/target/

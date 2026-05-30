@@ -27,18 +27,28 @@ fn get_board_path(_app: &AppHandle) -> PathBuf {
     }
 }
 
-#[tauri::command]
-fn load_board(app: AppHandle) -> Result<Board, String> {
-    let path = get_board_path(&app);
-
-    // If file doesn't exist, return empty board (don't create file until user saves)
+/// Pure IO core for loading a board from a concrete path. Kept free of
+/// `AppHandle` so it is directly unit/integration testable (see
+/// `tests/board_roundtrip.rs`).
+///
+/// - A missing file yields an empty `Board` (we don't create the file until the
+///   user saves), mirroring the `load_board` command's behavior.
+/// - Malformed JSON returns `Err` rather than silently swallowing it into an
+///   empty board (see P0.1 / F73).
+pub fn load_board_at(path: &std::path::Path) -> Result<Board, String> {
     if !path.exists() {
         return Ok(Board::default());
     }
 
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let board: Board = serde_json::from_str(&content).map_err(|e| e.to_string())?;
     Ok(board)
+}
+
+#[tauri::command]
+fn load_board(app: AppHandle) -> Result<Board, String> {
+    let path = get_board_path(&app);
+    load_board_at(&path)
 }
 
 /// Atomically write a board to `path`.
@@ -609,6 +619,35 @@ fn paste_image(app: AppHandle) -> Result<PasteImageResult, String> {
     Err("No image found in clipboard".to_string())
 }
 
+/// Pure decision core for the file watcher: given a `board.json` change event,
+/// decide whether to emit a `board-changed` notification to the frontend.
+///
+/// Two rules, in order:
+/// 1. **Skip-our-own-save**: if `skip` is set (the app just wrote the file via
+///    `write_board_atomic`, which flips `SKIP_NEXT_EMIT`), we never emit — that
+///    change originated from us and re-emitting would cause a reload feedback
+///    loop. The caller is responsible for *consuming* (swapping) the flag.
+/// 2. **Debounce**: a single save can produce several filesystem events. We only
+///    emit if at least `debounce` has elapsed since `last_emit` (or there was no
+///    prior emit). `now == last_emit + debounce` exactly is treated as elapsed.
+///
+/// Pure (no globals, no `AppHandle`, no clock) so it is unit-tested directly in
+/// `tests/watcher.rs`.
+pub fn should_emit_change(
+    skip: bool,
+    last_emit: Option<std::time::Instant>,
+    now: std::time::Instant,
+    debounce: Duration,
+) -> bool {
+    if skip {
+        return false;
+    }
+    match last_emit {
+        Some(t) => now.duration_since(t) >= debounce,
+        None => true,
+    }
+}
+
 fn setup_file_watcher(app: AppHandle) {
     let board_path = get_board_path(&app);
     // Don't create board.json here - let user create it by adding nodes
@@ -645,18 +684,17 @@ fn setup_file_watcher(app: AppHandle) {
                         if is_board_file {
                             match event.kind {
                                 notify::EventKind::Modify(_) | notify::EventKind::Create(_) => {
-                                    // Check if we should skip this emission (our own save)
+                                    // Consume the skip flag (set by our own save) and let the
+                                    // pure decision core apply the skip + debounce rules.
                                     let was_skip_set = SKIP_NEXT_EMIT.swap(false, Ordering::SeqCst);
-                                    if was_skip_set {
-                                        continue; // Skip emitting for our own save
-                                    }
-
                                     let now = std::time::Instant::now();
-                                    let should_emit = last_emit
-                                        .map(|t| now.duration_since(t) >= debounce_duration)
-                                        .unwrap_or(true);
 
-                                    if should_emit {
+                                    if should_emit_change(
+                                        was_skip_set,
+                                        last_emit,
+                                        now,
+                                        debounce_duration,
+                                    ) {
                                         last_emit = Some(now);
                                         std::thread::sleep(Duration::from_millis(100));
                                         let _ = app.emit("board-changed", ());
@@ -698,44 +736,42 @@ mod tests {
     mod read_markdown_file_tests {
         use super::*;
 
-        // Allowed root for tests = the canonical system temp dir.
-        fn temp_roots() -> Vec<PathBuf> {
-            vec![std::env::temp_dir()]
-        }
+        // Each test owns a fresh `tempfile::tempdir()` so parallel runs never
+        // collide on a shared fixed file name (was the F80 race). The TempDir is
+        // RAII-cleaned on drop — no manual removal needed.
 
         #[test]
         fn reads_absolute_path() {
-            let dir = std::env::temp_dir();
-            let path = dir.join("test_read_absolute.md");
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let path = dir.path().join("test_read_absolute.md");
             let content = "# Test\nHello world";
             std::fs::write(&path, content).unwrap();
 
-            let result = read_markdown_file_scoped(&path.to_string_lossy(), &temp_roots());
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
-
-            std::fs::remove_file(&path).ok();
         }
 
         #[test]
         fn reads_file_url() {
-            let dir = std::env::temp_dir();
-            let path = dir.join("test_read_file_url.md");
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let path = dir.path().join("test_read_file_url.md");
             let content = "# File URL Test";
             std::fs::write(&path, content).unwrap();
 
             let file_url = format!("file://{}", path.to_string_lossy());
-            let result = read_markdown_file_scoped(&file_url, &temp_roots());
+            let result = read_markdown_file_scoped(&file_url, &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
-
-            std::fs::remove_file(&path).ok();
         }
 
         #[test]
         fn decodes_url_encoded_spaces() {
-            let dir = std::env::temp_dir();
-            let subdir = dir.join("test folder");
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let subdir = dir.path().join("test folder");
             std::fs::create_dir_all(&subdir).ok();
             let path = subdir.join("test file.md");
             let content = "# Spaces in path";
@@ -746,25 +782,23 @@ mod tests {
                 "file://{}",
                 path.to_string_lossy().replace(' ', "%20")
             );
-            let result = read_markdown_file_scoped(&encoded_path, &temp_roots());
+            let result = read_markdown_file_scoped(&encoded_path, &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
-
-            std::fs::remove_file(&path).ok();
-            std::fs::remove_dir(&subdir).ok();
         }
 
         #[test]
         fn expands_home_tilde() {
-            // This test verifies tilde expansion works
-            // We can only test the path transformation, not the actual read
-            // unless we create a file in the actual home directory
+            // This test verifies tilde expansion works. It must write to the real
+            // home directory (that's what `~` resolves to), so the file name is
+            // UUID-suffixed to stay unique across parallel test binaries.
             let home = dirs::home_dir().unwrap();
-            let test_file = home.join(".brainstorm_test_temp.md");
+            let name = format!(".brainstorm_test_temp_{}.md", uuid::Uuid::new_v4());
+            let test_file = home.join(&name);
             let content = "# Home test";
             std::fs::write(&test_file, content).unwrap();
 
-            let result = read_markdown_file_scoped("~/.brainstorm_test_temp.md", &[home]);
+            let result = read_markdown_file_scoped(&format!("~/{}", name), &[home]);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
 
@@ -773,42 +807,44 @@ mod tests {
 
         #[test]
         fn returns_error_for_nonexistent_file() {
-            let result = read_markdown_file_scoped("/nonexistent/path/to/file.md", &temp_roots());
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let missing = dir.path().join("does_not_exist.md");
+            let result = read_markdown_file_scoped(&missing.to_string_lossy(), &roots);
             assert!(result.is_err());
         }
 
         #[test]
         fn handles_unicode_content() {
-            let dir = std::env::temp_dir();
-            let path = dir.join("test_unicode.md");
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let path = dir.path().join("test_unicode.md");
             let content = "# Unicode Test\n日本語 中文 한국어 🎉";
             std::fs::write(&path, content).unwrap();
 
-            let result = read_markdown_file_scoped(&path.to_string_lossy(), &temp_roots());
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
-
-            std::fs::remove_file(&path).ok();
         }
 
         #[test]
         fn handles_empty_file() {
-            let dir = std::env::temp_dir();
-            let path = dir.join("test_empty.md");
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let path = dir.path().join("test_empty.md");
             std::fs::write(&path, "").unwrap();
 
-            let result = read_markdown_file_scoped(&path.to_string_lossy(), &temp_roots());
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), "");
-
-            std::fs::remove_file(&path).ok();
         }
 
         #[test]
         fn handles_multiple_encoded_characters() {
-            let dir = std::env::temp_dir();
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
             // Create a path with multiple special chars that need encoding
-            let subdir = dir.join("test & folder");
+            let subdir = dir.path().join("test & folder");
             std::fs::create_dir_all(&subdir).ok();
             let path = subdir.join("notes (copy).md");
             let content = "# Special chars in path";
@@ -823,46 +859,39 @@ mod tests {
                     .replace('(', "%28")
                     .replace(')', "%29")
             );
-            let result = read_markdown_file_scoped(&encoded_path, &temp_roots());
+            let result = read_markdown_file_scoped(&encoded_path, &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
-
-            std::fs::remove_file(&path).ok();
-            std::fs::remove_dir(&subdir).ok();
         }
 
         #[test]
         fn rejects_md_file_outside_allowed_roots() {
             // A .md file that exists but lives outside the allowed roots is denied.
-            let dir = std::env::temp_dir();
-            let path = dir.join("test_outside_scope.md");
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("test_outside_scope.md");
             std::fs::write(&path, "# secret").unwrap();
 
-            // Allowed root is an unrelated subdirectory, NOT the temp dir itself.
-            let other_root = dir.join("brainstorm_unrelated_root");
+            // Allowed root is an unrelated subdirectory, NOT the dir holding the file.
+            let other_root = dir.path().join("brainstorm_unrelated_root");
             std::fs::create_dir_all(&other_root).ok();
 
             let result = read_markdown_file_scoped(&path.to_string_lossy(), &[other_root.clone()]);
             assert!(result.is_err());
             assert!(result.unwrap_err().contains("Access denied"));
-
-            std::fs::remove_file(&path).ok();
-            std::fs::remove_dir(&other_root).ok();
         }
 
         #[test]
         fn rejects_non_md_file_inside_allowed_roots() {
             // Even inside an allowed root, a non-.md file (e.g. an imitation of a
             // system secret) is rejected by the extension guard.
-            let dir = std::env::temp_dir();
-            let path = dir.join("test_secret_creds.txt");
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let path = dir.path().join("test_secret_creds.txt");
             std::fs::write(&path, "topsecret").unwrap();
 
-            let result = read_markdown_file_scoped(&path.to_string_lossy(), &temp_roots());
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &roots);
             assert!(result.is_err());
             assert!(result.unwrap_err().contains("only .md"));
-
-            std::fs::remove_file(&path).ok();
         }
     }
 
@@ -872,14 +901,11 @@ mod tests {
         #[test]
         fn rejects_etc_passwd_for_image_read() {
             // /etc/passwd is outside any board dir and not image bytes anyway.
-            let dir = std::env::temp_dir();
-            let board = dir.join("brainstorm_board_scope_a");
-            std::fs::create_dir_all(&board).ok();
+            let dir = tempfile::tempdir().unwrap();
+            let board = dir.path().to_path_buf();
 
-            let result = read_image_base64_scoped("/etc/passwd", &[board.clone()]);
+            let result = read_image_base64_scoped("/etc/passwd", &[board]);
             assert!(result.is_err(), "/etc/passwd must be rejected");
-
-            std::fs::remove_dir(&board).ok();
         }
 
         #[test]
@@ -896,28 +922,24 @@ mod tests {
         fn rejects_path_traversal_escape() {
             // A path that climbs out of the board dir via `..` must be rejected
             // because canonicalization resolves it outside the allowed root.
-            let dir = std::env::temp_dir();
-            let board = dir.join("brainstorm_board_scope_b");
+            let dir = tempfile::tempdir().unwrap();
+            let board = dir.path().join("board");
             std::fs::create_dir_all(&board).ok();
 
             // Create a real .md file OUTSIDE the board dir, then reference it via ..
-            let secret = dir.join("brainstorm_outside_secret.md");
+            let secret = dir.path().join("brainstorm_outside_secret.md");
             std::fs::write(&secret, "# leak").unwrap();
 
             let traversal = format!("{}/../brainstorm_outside_secret.md", board.to_string_lossy());
             let result = read_markdown_file_scoped(&traversal, &[board.clone()]);
             assert!(result.is_err(), "traversal escape must be rejected");
-
-            std::fs::remove_file(&secret).ok();
-            std::fs::remove_dir(&board).ok();
         }
 
         #[test]
         fn allows_image_inside_board_dir() {
             // A real PNG inside the board dir is accepted and base64-encoded.
-            let dir = std::env::temp_dir();
-            let board = dir.join("brainstorm_board_scope_c");
-            std::fs::create_dir_all(&board).ok();
+            let dir = tempfile::tempdir().unwrap();
+            let board = dir.path().to_path_buf();
 
             // Minimal valid PNG magic-byte header (signature is enough for sniffing).
             let png_sig = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01];
@@ -927,17 +949,13 @@ mod tests {
             let result = read_image_base64_scoped(&img.to_string_lossy(), &[board.clone()]);
             assert!(result.is_ok(), "board-dir image should load: {:?}", result);
             assert!(result.unwrap().starts_with("data:image/png;base64,"));
-
-            std::fs::remove_file(&img).ok();
-            std::fs::remove_dir(&board).ok();
         }
 
         #[test]
         fn rejects_non_image_content_with_image_extension() {
             // A text file renamed to .png is rejected by magic-byte sniffing.
-            let dir = std::env::temp_dir();
-            let board = dir.join("brainstorm_board_scope_d");
-            std::fs::create_dir_all(&board).ok();
+            let dir = tempfile::tempdir().unwrap();
+            let board = dir.path().to_path_buf();
 
             let fake = board.join("evil.png");
             std::fs::write(&fake, b"root:x:0:0:root:/root:/bin/bash\n").unwrap();
@@ -945,16 +963,12 @@ mod tests {
             let result = read_image_base64_scoped(&fake.to_string_lossy(), &[board.clone()]);
             assert!(result.is_err(), "non-image content must be rejected");
             assert!(result.unwrap_err().contains("non-image"));
-
-            std::fs::remove_file(&fake).ok();
-            std::fs::remove_dir(&board).ok();
         }
 
         #[test]
         fn rejects_oversized_image() {
-            let dir = std::env::temp_dir();
-            let board = dir.join("brainstorm_board_scope_e");
-            std::fs::create_dir_all(&board).ok();
+            let dir = tempfile::tempdir().unwrap();
+            let board = dir.path().to_path_buf();
 
             // Write a file larger than the cap. Start with a PNG signature so the
             // size check (which runs first) is unambiguously what rejects it.
@@ -966,9 +980,6 @@ mod tests {
             let result = read_image_base64_scoped(&big.to_string_lossy(), &[board.clone()]);
             assert!(result.is_err(), "oversized image must be rejected");
             assert!(result.unwrap_err().contains("too large"));
-
-            std::fs::remove_file(&big).ok();
-            std::fs::remove_dir(&board).ok();
         }
 
         #[test]

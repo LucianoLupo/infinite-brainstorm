@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # Strict safety net: the backend (Tauri) crate must type-check and all its
+  # tests must pass. Run single-threaded to mirror the local gate (defensive;
+  # the fixed-temp-file race F80 is fixed, but parallel + single-thread are both
+  # expected to be green).
+  backend:
+    name: Backend (check + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            patchelf
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: cargo check (backend)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: cargo test (backend, single-threaded)
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+
+  # Strict safety net for the frontend (Leptos/WASM) crate: it must type-check
+  # for its real wasm target AND its host-side unit tests must pass. We use
+  # `cargo check --target wasm32-unknown-unknown` rather than a full `trunk
+  # build` to keep CI fast; the shared `brainstorm-types` crate's logic tests
+  # run on the host.
+  frontend:
+    name: Frontend (wasm check + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (+ wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: cargo check (frontend, wasm target)
+        run: cargo check --target wasm32-unknown-unknown
+
+      - name: cargo test (frontend / shared types, host)
+        run: cargo test
+
+  # Lint job. Pre-existing fmt + clippy findings live outside this item's scope,
+  # so this job is INFORMATIONAL (continue-on-error) for now: it surfaces lints
+  # without blocking the pipeline. Tighten to blocking once the tree is fmt- and
+  # clippy-clean (tracked as a follow-up).
+  lint:
+    name: Lint (fmt + clippy, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            patchelf
+
+      - name: Install Rust toolchain (+ rustfmt, clippy, wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: cargo fmt --all --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy (frontend)
+        run: cargo clippy --all-targets
+
+      - name: cargo clippy (backend)
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets

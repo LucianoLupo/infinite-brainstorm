@@ -45,11 +45,15 @@ Everything stays in sync. Automatically.
 - **Directed Graph** — Edges render as arrows with arrowheads clipped to node borders
 - **Node Metadata** — Color, tags, status, group, and priority fields for categorization
 - **Real-Time Sync** — External file changes appear instantly (<100ms)
-- **Agent-Native** — AI assistants edit `board.json` directly, with a bundled [Claude Code skill](#claude-code-skill)
-- **Undo/Redo** — Full history stack (Cmd+Z / Cmd+Shift+Z)
+- **Agent-Native** — AI assistants edit `board.json` directly, with a bundled [Claude Code skill](#claude-code-skill), a [JSON Schema](#claude-code-skill), and headless [`validate`/`query` CLI](#cli-validate--query)
+- **Crash-Safe Saves** — Atomic writes (temp + rename, with `.bak`); a parse error preserves your board and shows a banner instead of blanking it
+- **Search** — Cmd+F overlay filters by text, tags, or status; Enter recenters the first match
+- **Minimap** — Bottom-right overview with click-to-recenter
+- **PNG Export** — Save the current viewport as an image
+- **Undo/Redo** — History stack (Cmd+Z / Cmd+Shift+Z), captures text edits and selection
 - **Image Paste** — Cmd+V pastes clipboard images into `./assets/`
-- **Node Resizing** — Drag corner handles (min 50x30)
-- **Link Previews** — Open Graph metadata fetching for URL nodes
+- **Node Resizing** — Drag corner handles (min 50x30); snap-to-grid on drag release
+- **Link Previews** — Open Graph metadata fetching for URL nodes (SSRF-hardened)
 - **Obsidian Integration** — Link nodes pointing to local `.md` files render as markdown
 - **Dual Storage** — Desktop app uses filesystem, browser uses localStorage
 - **Directory-Based** — Each project folder gets its own board
@@ -148,10 +152,14 @@ Templates live in `.claude/skills/infinite-brainstorm/templates/`. Claude Code r
 | **Scroll wheel** | Zoom (centered on cursor) |
 | **Cmd/Ctrl + V** | Paste clipboard image at cursor |
 | **T** | Cycle node type on selected nodes |
+| **Cmd/Ctrl + A** | Select all nodes |
+| **Cmd/Ctrl + F** | Search (filter by text/tags/status, Enter recenters first match) |
+| **F** | Fit all nodes to view |
+| **Cmd/Ctrl + 0** | Reset zoom to 1.0 |
 | **Delete / Backspace** | Delete selected nodes or edge |
 | **Cmd/Ctrl + Z** | Undo |
 | **Cmd/Ctrl + Shift + Z** | Redo |
-| **Escape** | Clear selection, cancel editing |
+| **Escape** | Clear selection, cancel editing, close active modal |
 
 ### Node Types
 
@@ -196,7 +204,9 @@ All data lives in `board.json`:
 }
 ```
 
-**Edges are directed** — rendered as arrows from `from_node` to `to_node` with arrowheads at the target.
+**Edges are directed** — rendered as arrows from `from_node` to `to_node` with arrowheads at the target. An optional `label` field is drawn at the edge midpoint.
+
+The board may carry an optional top-level `version` (defaults to `1`); files without it load unchanged. `node_type` is forward-compatible — an unrecognized value renders with neutral fallback styling rather than failing to load.
 
 **Node metadata** (all optional):
 
@@ -223,28 +233,62 @@ Changes sync to the canvas in under 100ms.
 
 See [`CLAUDE.md`](./CLAUDE.md) for detailed AI integration docs, or install the [Claude Code skill](#claude-code-skill) for the best experience.
 
+### CLI: validate & query
+
+Two headless subcommands let agents inspect a board without opening the UI — making the loop **write → validate → commit**. With no subcommand, `brainstorm` launches the desktop app.
+
+```bash
+# Validate structure: duplicate/dangling ids, non-finite coords, bad priority.
+# Exits non-zero on any structural error; unknown keys / future versions warn only.
+brainstorm validate              # validates ./board.json
+brainstorm validate other.json
+
+# Read-only queries, printed to stdout.
+brainstorm query count           # node + edge counts
+brainstorm query nodes
+brainstorm query edges
+brainstorm query node:<id>       # one node by id
+brainstorm query type:idea       # nodes of a node_type
+brainstorm query tag:urgent      # nodes carrying a tag
+```
+
+The board format is defined by a JSON Schema at `.claude/skills/infinite-brainstorm/board.schema.json`.
+
 ## Architecture
 
 ```
-infinite-brainstorm/
+infinite-brainstorm/              # Cargo workspace
+├── crates/
+│   └── brainstorm-types/        # Shared data model + geometry, used by both crates
+│       └── src/lib.rs           # Board, Node, Edge, NodeType, Camera, validation
+│
 ├── src/                          # Frontend (Leptos WASM)
 │   ├── main.rs                  # Entry point
 │   ├── app.rs                   # Main component, event handlers, state
-│   ├── canvas.rs                # HTML5 Canvas rendering, arrowheads, clipping
-│   ├── state.rs                 # Data types (Board, Node, Edge, Camera)
-│   ├── history.rs               # Undo/redo history stack
+│   ├── interaction.rs           # DOM-free reducer (BoardAction + reduce)
+│   ├── canvas.rs                # Canvas rendering (rAF coalescer, culling, HiDPI)
+│   ├── state.rs                 # Re-exports brainstorm-types + camera persistence
+│   ├── history.rs               # Undo/redo history (bounded)
 │   └── components/              # Extracted UI components
+│       ├── error_banner.rs      # Non-blocking parse-error banner
+│       ├── minimap.rs           # Bottom-right overview, click-to-recenter
+│       ├── search_overlay.rs    # Cmd+F search
 │       ├── image_modal.rs       # Full-screen image preview
 │       ├── markdown_modal.rs    # Markdown editor modal
 │       ├── markdown_overlays.rs # Markdown rendering in nodes
 │       └── node_editor.rs       # Inline text editor
 │
 ├── src-tauri/                   # Backend (Tauri v2)
-│   └── src/lib.rs               # IPC commands, file watcher
+│   ├── src/main.rs              # clap CLI (validate/query/GUI)
+│   ├── src/lib.rs               # IPC commands, atomic save, file watcher
+│   └── tests/                   # Integration tests (atomic_save, board_roundtrip, watcher)
+│
+├── .github/workflows/ci.yml     # fmt + clippy + tests + wasm32 build
 │
 ├── .claude/skills/              # Claude Code skill
 │   └── infinite-brainstorm/
 │       ├── SKILL.md             # Schema, layouts, operations
+│       ├── board.schema.json    # JSON Schema (source of truth for board.json)
 │       └── templates/           # 6 board templates
 │
 ├── scripts/brainstorm           # CLI launcher
@@ -258,12 +302,22 @@ infinite-brainstorm/
 | Decision | Why |
 |----------|-----|
 | **JSON file as API** | AI assistants edit it directly. No complex integrations needed. |
-| **File watching** | External changes sync instantly. Enables real-time AI collaboration. |
+| **Shared types crate** | `crates/brainstorm-types` is the one data model both frontend and backend re-export — type drift is a compile error, not a silent bug. |
+| **Reducer layer** | All mutations flow through a pure `reduce(board, action)` in `interaction.rs`, so logic is DOM-free, unit-tested, and undo is snapshotted in one place. |
+| **Atomic saves** | Write to `.tmp`, fsync, rename over `board.json` (with a `.bak` copy) — never a partial write. A parse error preserves the board and shows a banner. |
+| **File watching** | External changes sync instantly. Self-writes are suppressed by content-hash; reloads defer while you're mid-interaction. Enables real-time AI collaboration. |
 | **Directed edges** | Arrows with arrowheads represent flows, dependencies, hierarchies. |
 | **Node metadata** | Optional fields (color, tags, status, group, priority) enable agent-driven categorization without schema changes. |
 | **Current directory** | Each project folder gets its own board, like git repos. |
 | **Dual storage** | Tauri uses filesystem, browser uses localStorage. Same code path. |
-| **Skill + templates** | Claude Code skill bundles schema docs and layout templates for any-directory access. |
+| **Skill + schema + templates** | The Claude Code skill bundles a JSON Schema, layout docs, and templates; the `validate`/`query` CLI closes the agent loop. |
+
+### Security
+
+- **Restrictive CSP** — `tauri.conf.json` locks down sources (`default-src 'self'`, `script-src 'self'`, `object-src 'none'`, `frame-src 'none'`).
+- **Sanitized markdown** — Raw HTML in markdown nodes is escaped, so a `board.json` md node can't inject stored XSS.
+- **Scoped file reads** — Image/markdown reads are restricted to the board directory (plus `$HOME` for the Obsidian-vault feature), with a 25MB cap and magic-byte MIME sniffing (the file extension is not trusted).
+- **SSRF-hardened link previews** — Link fetches reject loopback / link-local / private / CGNAT / ULA addresses at the resolved-IP level on every redirect hop (DNS-rebinding safe), and cap redirects and response size.
 
 ## Contributing
 
@@ -274,35 +328,37 @@ Contributions are welcome!
 1. **Fork and clone** the repository
 2. **Install prerequisites**: Rust, WASM target, Trunk, Tauri CLI
 3. **Run in dev mode**: `cargo tauri dev`
-4. **Check both crates**: `cargo check` (frontend) and `cd src-tauri && cargo check` (backend)
+4. **Check both crates**: `cargo check` (frontend, host) and `cargo check --manifest-path src-tauri/Cargo.toml` (backend)
+5. **Run the tests**: `cargo test` (workspace host tests) and `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` (backend)
 
 ### Code Structure
 
 | File | What to modify |
 |------|----------------|
+| `crates/brainstorm-types/src/lib.rs` | Data types (Board, Node, Edge, NodeType), geometry, validation |
 | `src/app.rs` | Event handlers, interactions, UI logic |
+| `src/interaction.rs` | Pure board mutations (`BoardAction` + `reduce`) |
 | `src/canvas.rs` | Canvas rendering, visual appearance |
-| `src/state.rs` | Data types, add new node properties |
+| `src/state.rs` | Frontend re-export of shared types + camera persistence |
 | `src/history.rs` | Undo/redo behavior |
-| `src-tauri/src/lib.rs` | Backend commands, file watcher |
+| `src/components/` | Modals, error banner, minimap, search overlay |
+| `src-tauri/src/lib.rs` | Backend commands, atomic save, file watcher |
+| `src-tauri/src/main.rs` | `validate`/`query` CLI subcommands |
 
-**Note:** Types are duplicated between `src/state.rs` (frontend) and `src-tauri/src/lib.rs` (backend). Keep them in sync when modifying.
+**Note:** The data model lives in the shared `crates/brainstorm-types` crate, which both the frontend and backend re-export — so there's nothing to keep in sync by hand, and a mismatch is a compile error.
 
 ### Guidelines
 
-- **Keep it simple** — The codebase is intentionally minimal (~4,200 LOC)
-- **Test with AI** — Make sure Claude Code can still edit `board.json` after your changes
-- **Update docs** — If you add features, update `CLAUDE.md`, the skill, and this README
-- **Both crates must compile** — `cargo check` from root (frontend) and `src-tauri/` (backend)
+- **Keep it simple** — The codebase is intentionally minimal (~9,600 LOC across the workspace)
+- **Test with AI** — Make sure Claude Code can still edit `board.json` after your changes; run `brainstorm validate` on the result
+- **Update docs** — If you add features, update `CLAUDE.md`, the skill, `board.schema.json`, and this README
+- **Both crates must compile and pass tests** — `cargo test` (host) and `cargo test --manifest-path src-tauri/Cargo.toml` (backend); CI enforces this plus a wasm32 build
 
-### Ideas for Contributions
+Already shipped: PNG export, Cmd+F search/filter, minimap, edge labels, and group backgrounds. Still open:
 
-- [ ] **Export** — PNG, SVG, or PDF export of the canvas
-- [ ] **Search/filter** — Find nodes by text, tags, status
-- [ ] **Minimap** — Small overview for navigation
-- [ ] **Edge labels** — Text on edges to describe relationships
+- [ ] **SVG/PDF export** — Vector export of the canvas (PNG export already exists)
 - [ ] **Keyboard navigation** — Arrow keys to traverse connected nodes
-- [ ] **Group backgrounds** — Visual rectangles around nodes sharing a `group`
+- [ ] **Semantic zoom** — Node summaries when zoomed out
 - [ ] **Themes** — Light mode, custom color schemes
 - [ ] **Touch support** — Mobile/tablet gestures
 - [ ] **Multi-board** — Multiple board files per directory, board switcher
@@ -314,8 +370,10 @@ Contributions are welcome!
 |-----------|------------|
 | Desktop framework | [Tauri v2](https://tauri.app) |
 | Frontend framework | [Leptos 0.8](https://leptos.dev) |
-| Rendering | HTML5 Canvas |
-| Language | Rust (compiled to WASM) |
+| Rendering | HTML5 Canvas (HiDPI, requestAnimationFrame coalescing) |
+| Language | Rust (Cargo workspace; frontend compiled to WASM) |
+| Shared types | `crates/brainstorm-types` (one data model for both crates) |
+| CLI | [clap](https://docs.rs/clap) (`validate` / `query` subcommands) |
 | File watching | [notify](https://docs.rs/notify) |
 | Link previews | [scraper](https://docs.rs/scraper) + [reqwest](https://docs.rs/reqwest) |
 

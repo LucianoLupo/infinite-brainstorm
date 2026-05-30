@@ -2,7 +2,21 @@
 target = "./index.html"
 
 [watch]
-ignore = ["./src-tauri", "./board.json"]
+# Watch ONLY frontend source. Trunk's default watches the whole project root,
+# which made it rebuild + force-reload the webview whenever the app wrote runtime
+# data — board.json and its atomic-save siblings (board.json.tmp/.bak, P0.2) or a
+# pasted image in ./assets. That full reload remounts the app and resets the
+# viewport (a visible "view jump" ~1s after every edit). Whitelisting source
+# instead of blacklisting data is robust: these paths always exist (no transient
+# temp files to canonicalize) and new runtime files can never trigger a reload.
+watch = [
+    "src",
+    "crates",
+    "index.html",
+    "styles.css",
+    "public",
+    "Cargo.toml",
+]
 
 [serve]
 port = 1420

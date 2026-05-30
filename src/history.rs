@@ -69,14 +69,13 @@ impl<T: Clone> History<T> {
     pub fn undo(&mut self, current: T) -> Option<T> {
         // A navigation breaks any coalescing run.
         self.last_kind = None;
-        self.past.pop_back().map(|previous| {
+        self.past.pop_back().inspect(|_previous| {
             self.future.push_back(current);
             // Bound the redo stack the same way the undo stack is bounded, so a
             // long undo run can't grow `future` without limit.
             while self.future.len() > self.max_size {
                 self.future.pop_front();
             }
-            previous
         })
     }
 
@@ -84,12 +83,11 @@ impl<T: Clone> History<T> {
     pub fn redo(&mut self, current: T) -> Option<T> {
         // A navigation breaks any coalescing run.
         self.last_kind = None;
-        self.future.pop_back().map(|next| {
+        self.future.pop_back().inspect(|_next| {
             self.past.push_back(current);
             while self.past.len() > self.max_size {
                 self.past.pop_front();
             }
-            next
         })
     }
 

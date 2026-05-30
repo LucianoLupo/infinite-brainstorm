@@ -1446,7 +1446,10 @@ mod tests {
             let other_root = dir.path().join("brainstorm_unrelated_root");
             std::fs::create_dir_all(&other_root).ok();
 
-            let result = read_markdown_file_scoped(&path.to_string_lossy(), &[other_root.clone()]);
+            let result = read_markdown_file_scoped(
+                &path.to_string_lossy(),
+                std::slice::from_ref(&other_root),
+            );
             assert!(result.is_err());
             assert!(result.unwrap_err().contains("Access denied"));
         }
@@ -1505,7 +1508,7 @@ mod tests {
                 "{}/../brainstorm_outside_secret.md",
                 board.to_string_lossy()
             );
-            let result = read_markdown_file_scoped(&traversal, &[board.clone()]);
+            let result = read_markdown_file_scoped(&traversal, std::slice::from_ref(&board));
             assert!(result.is_err(), "traversal escape must be rejected");
         }
 
@@ -1520,7 +1523,8 @@ mod tests {
             let img = board.join("pic.png");
             std::fs::write(&img, png_sig).unwrap();
 
-            let result = read_image_base64_scoped(&img.to_string_lossy(), &[board.clone()]);
+            let result =
+                read_image_base64_scoped(&img.to_string_lossy(), std::slice::from_ref(&board));
             assert!(result.is_ok(), "board-dir image should load: {:?}", result);
             assert!(result.unwrap().starts_with("data:image/png;base64,"));
         }
@@ -1534,7 +1538,8 @@ mod tests {
             let fake = board.join("evil.png");
             std::fs::write(&fake, b"root:x:0:0:root:/root:/bin/bash\n").unwrap();
 
-            let result = read_image_base64_scoped(&fake.to_string_lossy(), &[board.clone()]);
+            let result =
+                read_image_base64_scoped(&fake.to_string_lossy(), std::slice::from_ref(&board));
             assert!(result.is_err(), "non-image content must be rejected");
             assert!(result.unwrap_err().contains("non-image"));
         }
@@ -1551,7 +1556,8 @@ mod tests {
             data.resize((MAX_IMAGE_BYTES + 1) as usize, 0u8);
             std::fs::write(&big, &data).unwrap();
 
-            let result = read_image_base64_scoped(&big.to_string_lossy(), &[board.clone()]);
+            let result =
+                read_image_base64_scoped(&big.to_string_lossy(), std::slice::from_ref(&board));
             assert!(result.is_err(), "oversized image must be rejected");
             assert!(result.unwrap_err().contains("too large"));
         }

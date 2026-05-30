@@ -527,6 +527,8 @@ fn draw_node(
     }
 }
 
+// Rendering primitive; args map 1:1 to draw state (context, node, camera, screen rect, cache).
+#[allow(clippy::too_many_arguments)]
 fn draw_image_content(
     ctx: &CanvasRenderingContext2d,
     node: &Node,
@@ -626,6 +628,8 @@ fn draw_image_content(
     }
 }
 
+// Rendering primitive; args map 1:1 to draw state (context, node, camera, screen rect, caches).
+#[allow(clippy::too_many_arguments)]
 fn draw_link_content(
     ctx: &CanvasRenderingContext2d,
     node: &Node,

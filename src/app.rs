@@ -1,5 +1,5 @@
 use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache};
-use crate::components::{ErrorBanner, ImageModal, MarkdownModal, MarkdownOverlays, NodeEditor};
+use crate::components::{ErrorBanner, ImageModal, MarkdownModal, MarkdownOverlays, NodeEditor, SearchOverlay};
 use crate::history::History;
 use crate::interaction::{reduce, BoardAction, SideEffect};
 use crate::state::{Board, Camera, Edge, LinkPreview, Node, NodeType, ResizeHandle, RESIZE_HANDLE_SIZE, MIN_NODE_WIDTH, MIN_NODE_HEIGHT};
@@ -24,6 +24,10 @@ extern "C" {
 }
 
 const LOCALSTORAGE_KEY: &str = "infinite-brainstorm-board";
+/// Prefix for the per-board camera persistence key. The board's identity
+/// (its file path in Tauri mode) is appended so distinct boards keep distinct
+/// viewports; browser mode uses the bare prefix since it has a single board.
+const CAMERA_KEY_PREFIX: &str = "infinite-brainstorm-camera";
 
 fn is_tauri() -> bool {
     web_sys::window()
@@ -139,6 +143,47 @@ pub(crate) async fn save_board_storage(board: &Board) {
             let _ = storage.set_item(LOCALSTORAGE_KEY, &json);
         }
     }
+}
+
+/// Read the `window.localStorage` handle, if available. localStorage is present
+/// in both the Tauri webview and a plain browser, so camera persistence works in
+/// either mode without an IPC round-trip.
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+}
+
+/// Persist the camera under `key`. Best-effort: a serialization or storage error
+/// is silently ignored (a missing/quota-full Storage must not break panning).
+fn save_camera_storage(key: &str, camera: &Camera) {
+    if let (Some(storage), Ok(json)) = (
+        local_storage(),
+        serde_json::to_string(&CameraPersist::from_camera(camera)),
+    ) {
+        let _ = storage.set_item(key, &json);
+    }
+}
+
+/// Restore a persisted camera for `key`, sanitizing a corrupt value via
+/// [`CameraPersist::to_camera`]. Returns `None` if nothing was stored or the
+/// stored value won't parse (in which case the caller keeps the default camera).
+fn load_camera_storage(key: &str) -> Option<Camera> {
+    let json = local_storage()?.get_item(key).ok().flatten()?;
+    serde_json::from_str::<CameraPersist>(&json)
+        .ok()
+        .map(CameraPersist::to_camera)
+}
+
+/// Resolve the per-board camera key. In Tauri mode the board path is appended so
+/// each `board.json` directory keeps its own viewport; in browser mode (single
+/// board) the bare prefix is used.
+async fn camera_storage_key() -> String {
+    if is_tauri() {
+        let result = invoke("get_board_path_cmd", JsValue::NULL).await;
+        if let Some(path) = result.as_string() {
+            return format!("{}:{}", CAMERA_KEY_PREFIX, path);
+        }
+    }
+    CAMERA_KEY_PREFIX.to_string()
 }
 
 /// Trailing-edge debounce window for the persistence sink, in milliseconds.
@@ -549,6 +594,118 @@ fn point_near_line(px: f64, py: f64, x1: f64, y1: f64, x2: f64, y2: f64, thresho
     dist < threshold
 }
 
+/// Case-insensitive substring match of `query` against a node's searchable text:
+/// its body text, any of its tags, and its status. An empty/whitespace-only query
+/// matches nothing (so a blank search box doesn't select every node).
+///
+/// Pure and allocation-light so the search overlay can filter a 100+ node board on
+/// every keystroke without touching the DOM or signals.
+pub fn node_matches_query(node: &Node, query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return false;
+    }
+    if node.text.to_lowercase().contains(&q) {
+        return true;
+    }
+    if node.tags.iter().any(|t| t.to_lowercase().contains(&q)) {
+        return true;
+    }
+    if let Some(status) = &node.status {
+        if status.to_lowercase().contains(&q) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Axis-aligned bounding box `(min_x, min_y, max_x, max_y)` enclosing every node
+/// (each node spans `x..x+width`, `y..y+height`). Returns `None` for an empty
+/// slice. Pure so fit-to-view math is unit-testable without a canvas.
+pub fn nodes_bounding_box(nodes: &[Node]) -> Option<(f64, f64, f64, f64)> {
+    let mut iter = nodes.iter();
+    let first = iter.next()?;
+    let mut min_x = first.x;
+    let mut min_y = first.y;
+    let mut max_x = first.x + first.width;
+    let mut max_y = first.y + first.height;
+    for n in iter {
+        min_x = min_x.min(n.x);
+        min_y = min_y.min(n.y);
+        max_x = max_x.max(n.x + n.width);
+        max_y = max_y.max(n.y + n.height);
+    }
+    Some((min_x, min_y, max_x, max_y))
+}
+
+/// Compute a [`Camera`] that frames `bbox` within a `canvas_w` x `canvas_h`
+/// viewport, leaving ~`margin_frac` (e.g. 0.1 = 10%) padding on every side. The
+/// zoom fits the larger relative dimension and is clamped to the app's `0.1..=5.0`
+/// range; the camera origin is positioned so the padded box is centered.
+///
+/// Pure: takes the box + viewport, returns a Camera — no DOM, easy to test.
+pub fn fit_camera(
+    bbox: (f64, f64, f64, f64),
+    canvas_w: f64,
+    canvas_h: f64,
+    margin_frac: f64,
+) -> Camera {
+    let (min_x, min_y, max_x, max_y) = bbox;
+    let box_w = (max_x - min_x).max(1.0);
+    let box_h = (max_y - min_y).max(1.0);
+
+    // Pad the box on all sides so nodes don't touch the viewport edge.
+    let pad_x = box_w * margin_frac;
+    let pad_y = box_h * margin_frac;
+    let padded_w = box_w + pad_x * 2.0;
+    let padded_h = box_h + pad_y * 2.0;
+
+    // Guard a degenerate viewport (e.g. canvas not yet laid out) so we never
+    // divide by zero or produce a non-finite zoom.
+    let cw = if canvas_w.is_finite() && canvas_w > 0.0 { canvas_w } else { 1.0 };
+    let ch = if canvas_h.is_finite() && canvas_h > 0.0 { canvas_h } else { 1.0 };
+
+    let zoom = (cw / padded_w).min(ch / padded_h).clamp(0.1, 5.0);
+
+    // Center the padded box: world coords of the viewport's top-left corner.
+    let center_x = (min_x + max_x) / 2.0;
+    let center_y = (min_y + max_y) / 2.0;
+    let cam_x = center_x - (cw / zoom) / 2.0;
+    let cam_y = center_y - (ch / zoom) / 2.0;
+
+    Camera { x: cam_x, y: cam_y, zoom }
+}
+
+/// Serializable camera snapshot persisted to localStorage so a reopened board
+/// restores its last pan/zoom (F105). Kept separate from [`Camera`] (which is not
+/// `Serialize`) to avoid widening the shared type's derives.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct CameraPersist {
+    pub x: f64,
+    pub y: f64,
+    pub zoom: f64,
+}
+
+impl CameraPersist {
+    pub fn from_camera(c: &Camera) -> Self {
+        Self { x: c.x, y: c.y, zoom: c.zoom }
+    }
+
+    /// Rebuild a [`Camera`], sanitizing a corrupt/hand-edited persisted zoom: a
+    /// non-finite or out-of-range zoom falls back to `1.0` so a bad localStorage
+    /// value can't strand the viewport at an unusable scale.
+    pub fn to_camera(self) -> Camera {
+        let zoom = if self.zoom.is_finite() && (0.1..=5.0).contains(&self.zoom) {
+            self.zoom
+        } else {
+            1.0
+        };
+        let x = if self.x.is_finite() { self.x } else { 0.0 };
+        let y = if self.y.is_finite() { self.y } else { 0.0 };
+        Camera { x, y, zoom }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct BoardCtx {
     pub board: ReadSignal<Board>,
@@ -580,6 +737,9 @@ pub struct BoardCtx {
     /// Single mutation entry point. Editor components dispatch text edits through
     /// this so each commit snapshots undo history (fixes undo dropping typed text).
     pub dispatch: Dispatcher,
+    /// Search overlay query (P2.4 / F99). `Some(query)` while open; `None` closed.
+    pub search_query: ReadSignal<Option<String>>,
+    pub set_search_query: WriteSignal<Option<String>>,
 }
 
 #[component]
@@ -600,6 +760,13 @@ pub fn App() -> impl IntoView {
     let (modal_md, set_modal_md) = signal::<Option<(String, bool)>>(None); // (node_id, is_editing)
     let (md_edit_text, set_md_edit_text) = signal::<String>(String::new()); // Separate signal to avoid re-render on typing
     let (node_clipboard, set_node_clipboard) = signal::<Option<(Vec<Node>, Vec<Edge>)>>(None);
+    // Search overlay (P2.4 / F99): `Some(query)` while the Cmd/Ctrl+F overlay is
+    // open; `None` when closed. Matches are reflected into `selected_nodes` so they
+    // render with the existing selection highlight.
+    let (search_query, set_search_query) = signal::<Option<String>>(None);
+    // Resolved per-board key for camera persistence. Defaults to the browser key
+    // and is refined to the Tauri board-path key once it resolves on startup.
+    let camera_key: StoredValue<String> = StoredValue::new(CAMERA_KEY_PREFIX.to_string());
 
     // Undo/redo history - using Rc<RefCell> since mutations don't need reactivity.
     // Snapshots are (Board, node selection) so undo/redo restore the selection too.
@@ -627,6 +794,28 @@ pub fn App() -> impl IntoView {
     // so the watcher can never clobber an edit mid-gesture (P1.4 / F50).
     let pending_external_reload = RwSignal::<bool>::new(false);
     let request_save = make_request_save(board, local_edit_pending);
+
+    // Debounced camera persistence (F105). Pan/zoom end-points call this; a burst
+    // of wheel ticks coalesces into one localStorage write 200ms after the last
+    // change. The closure reads the freshest camera + resolved key at flush time.
+    let persist_camera: StoredValue<Rc<dyn Fn()>, LocalStorage> = {
+        let pending: Rc<RefCell<Option<gloo_timers::callback::Timeout>>> =
+            Rc::new(RefCell::new(None));
+        let sink: Rc<dyn Fn()> = Rc::new(move || {
+            let pending_for_timer = pending.clone();
+            let timeout = gloo_timers::callback::Timeout::new(200, move || {
+                pending_for_timer.borrow_mut().take();
+                let cam = camera.get_untracked();
+                let key = camera_key.get_value();
+                save_camera_storage(&key, &cam);
+            });
+            *pending.borrow_mut() = Some(timeout);
+        });
+        StoredValue::new_local(sink)
+    };
+    let persist_camera_now = move || {
+        (persist_camera.get_value())();
+    };
 
     // Single mutation entry point shared by handlers and editor components.
     let dispatch = Dispatcher {
@@ -661,13 +850,25 @@ pub fn App() -> impl IntoView {
         request_save,
         local_edit_pending,
         dispatch,
+        search_query,
+        set_search_query,
     });
 
-    // Load board on startup (with small delay to ensure Tauri is ready)
+    // Load board on startup (with small delay to ensure Tauri is ready).
+    // Camera persistence (F105) is restored ONLY here — the file-watcher reload
+    // path deliberately leaves the live viewport alone so an external board edit
+    // never yanks the user's pan/zoom.
     Effect::new(move || {
         spawn_local(async move {
             // Small delay to ensure Tauri's __TAURI__ is injected
             gloo_timers::future::TimeoutFuture::new(50).await;
+            // Resolve the per-board camera key before restoring so subsequent
+            // pan/zoom writes land under the right (board-specific) key.
+            let key = camera_storage_key().await;
+            camera_key.set_value(key.clone());
+            if let Some(restored) = load_camera_storage(&key) {
+                set_camera.set(restored);
+            }
             reload_board_into(set_board, load_error).await;
         });
     });
@@ -1336,6 +1537,7 @@ pub fn App() -> impl IntoView {
     };
 
     let on_mouse_up = move |ev: web_sys::MouseEvent| {
+        let was_panning = pan_state.get_untracked().is_panning;
         let was_dragging = drag_state.get_untracked().is_dragging;
         let was_resizing = resize_state.get_untracked().is_resizing;
         let resize_snapshotted = resize_state.get_untracked().snapshotted;
@@ -1408,6 +1610,11 @@ pub fn App() -> impl IntoView {
         if was_dragging && drag_snapshotted {
             request_save.call();
         }
+
+        // Pan-end: persist the new viewport (F105).
+        if was_panning {
+            persist_camera_now();
+        }
     };
 
     let on_wheel = move |ev: web_sys::WheelEvent| {
@@ -1428,6 +1635,9 @@ pub fn App() -> impl IntoView {
             c.x = world_x - canvas_x / c.zoom;
             c.y = world_y - canvas_y / c.zoom;
         });
+
+        // Zoom-end: debounced so a scroll burst writes once (F105).
+        persist_camera_now();
     };
 
     let on_double_click = {
@@ -1597,6 +1807,51 @@ pub fn App() -> impl IntoView {
                     );
                 }
             }
+            "a" | "A" if ev.meta_key() || ev.ctrl_key() => {
+                // Select all nodes (F103). Edge selection is mutually exclusive
+                // with a node multi-selection, so clear it.
+                ev.prevent_default();
+                let all_ids: HashSet<String> = board
+                    .get_untracked()
+                    .nodes
+                    .iter()
+                    .map(|n| n.id.clone())
+                    .collect();
+                set_selected_nodes.set(all_ids);
+                set_selected_edge.set(None);
+            }
+            "f" | "F" if ev.meta_key() || ev.ctrl_key() => {
+                // Open the search overlay (F99). Seed with an empty query; the
+                // overlay input autofocuses.
+                ev.prevent_default();
+                set_search_query.set(Some(String::new()));
+            }
+            "f" | "F" => {
+                // Fit all nodes into view (F102). No-op on an empty board.
+                if let Some(bbox) = nodes_bounding_box(&board.get_untracked().nodes) {
+                    if let Some(canvas) = canvas_ref.get_untracked() {
+                        let rect = canvas.get_bounding_client_rect();
+                        let cam = fit_camera(bbox, rect.width(), rect.height(), 0.1);
+                        set_camera.set(cam);
+                        persist_camera_now();
+                    }
+                }
+            }
+            "0" if ev.meta_key() || ev.ctrl_key() => {
+                // Reset zoom to 1.0, keeping the viewport center fixed (F102).
+                ev.prevent_default();
+                if let Some(canvas) = canvas_ref.get_untracked() {
+                    let rect = canvas.get_bounding_client_rect();
+                    let (cw, ch) = (rect.width(), rect.height());
+                    set_camera.update(|c| {
+                        let (center_wx, center_wy) = c.screen_to_world(cw / 2.0, ch / 2.0);
+                        c.zoom = 1.0;
+                        c.x = center_wx - cw / 2.0;
+                        c.y = center_wy - ch / 2.0;
+                    });
+                    persist_camera_now();
+                }
+            }
             "Escape" => {
                 set_selected_nodes.set(HashSet::new());
                 set_selected_edge.set(None);
@@ -1750,6 +2005,7 @@ pub fn App() -> impl IntoView {
             <ImageModal/>
             <MarkdownModal/>
             <ErrorBanner/>
+            <SearchOverlay/>
             <Show when=move || !is_tauri()>
                 <div style="position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; z-index: 100;">
                     <button style=button_style on:click=on_upload>"Upload board.json"</button>
@@ -1759,7 +2015,7 @@ pub fn App() -> impl IntoView {
                        on:change=on_file_selected />
             </Show>
             <div style="position: fixed; bottom: 12px; left: 12px; color: #66cc88; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 11px; letter-spacing: 0.5px;">
-                "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [CMD+C] copy  [CMD+V] paste  [T] type  [DEL] delete  [CMD+Z] undo  [CMD+SHIFT+Z] redo"
+                "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [CMD+C] copy  [CMD+V] paste  [T] type  [DEL] delete  [CMD+Z] undo  [CMD+SHIFT+Z] redo  [CMD+F] search  [F] fit  [CMD+0] reset zoom  [CMD+A] select all"
             </div>
         </div>
     }
@@ -2107,6 +2363,170 @@ mod tests {
             let html = parse_markdown("hello <script>alert(1)</script> world");
             assert!(!html.contains("<script>"), "raw <script> leaked: {html}");
             assert!(html.contains("&lt;script&gt;"), "expected escaped script: {html}");
+        }
+    }
+
+    mod node_matches_query_tests {
+        use super::*;
+
+        fn node(text: &str) -> Node {
+            Node::new("n".to_string(), 0.0, 0.0, text.to_string())
+        }
+
+        #[test]
+        fn matches_text_case_insensitive() {
+            let n = node("Pricing Strategy");
+            assert!(node_matches_query(&n, "pricing"));
+            assert!(node_matches_query(&n, "STRATEGY"));
+            assert!(!node_matches_query(&n, "roadmap"));
+        }
+
+        #[test]
+        fn matches_tags() {
+            let mut n = node("body");
+            n.tags = vec!["urgent".to_string(), "v2".to_string()];
+            assert!(node_matches_query(&n, "urgent"));
+            assert!(node_matches_query(&n, "V2"));
+            assert!(!node_matches_query(&n, "v3"));
+        }
+
+        #[test]
+        fn matches_status() {
+            let mut n = node("body");
+            n.status = Some("in-progress".to_string());
+            assert!(node_matches_query(&n, "progress"));
+            assert!(!node_matches_query(&n, "done"));
+        }
+
+        #[test]
+        fn empty_query_matches_nothing() {
+            let n = node("anything");
+            assert!(!node_matches_query(&n, ""));
+            assert!(!node_matches_query(&n, "   \t"));
+        }
+    }
+
+    mod bounding_box_tests {
+        use super::*;
+
+        #[test]
+        fn empty_slice_is_none() {
+            assert!(nodes_bounding_box(&[]).is_none());
+        }
+
+        #[test]
+        fn single_node_box_is_its_rect() {
+            let n = Node::new("n".to_string(), 10.0, 20.0, "".to_string());
+            // Default 200x100.
+            let bbox = nodes_bounding_box(std::slice::from_ref(&n)).unwrap();
+            assert_eq!(bbox, (10.0, 20.0, 210.0, 120.0));
+        }
+
+        #[test]
+        fn spans_all_nodes_including_far_outlier() {
+            let near = Node::new("a".to_string(), 0.0, 0.0, "".to_string());
+            let far = Node::new("b".to_string(), 50000.0, 50000.0, "".to_string());
+            let bbox = nodes_bounding_box(&[near, far]).unwrap();
+            assert_eq!(bbox.0, 0.0);
+            assert_eq!(bbox.1, 0.0);
+            assert_eq!(bbox.2, 50200.0);
+            assert_eq!(bbox.3, 50100.0);
+        }
+    }
+
+    mod fit_camera_tests {
+        use super::*;
+
+        #[test]
+        fn distant_node_lands_inside_viewport() {
+            // The verify gate's scenario: a node placed at (50000, 50000). After
+            // fit-to-view it must be visible — its center maps to a screen point
+            // inside the canvas.
+            let node = Node::new("n".to_string(), 50000.0, 50000.0, "".to_string());
+            let bbox = nodes_bounding_box(std::slice::from_ref(&node)).unwrap();
+            let (cw, ch) = (800.0, 600.0);
+            let cam = fit_camera(bbox, cw, ch, 0.1);
+
+            let (center_wx, center_wy) = node.center();
+            let (sx, sy) = cam.world_to_screen(center_wx, center_wy);
+            assert!(sx >= 0.0 && sx <= cw, "x off-screen: {sx}");
+            assert!(sy >= 0.0 && sy <= ch, "y off-screen: {sy}");
+        }
+
+        #[test]
+        fn zoom_is_clamped_to_range() {
+            // A tiny box would otherwise demand a huge zoom; clamp caps at 5.0.
+            let tiny = (0.0, 0.0, 1.0, 1.0);
+            let cam = fit_camera(tiny, 800.0, 600.0, 0.1);
+            assert!(cam.zoom <= 5.0 && cam.zoom >= 0.1);
+        }
+
+        #[test]
+        fn huge_box_clamps_to_min_zoom() {
+            let huge = (0.0, 0.0, 1_000_000.0, 1_000_000.0);
+            let cam = fit_camera(huge, 800.0, 600.0, 0.1);
+            assert_eq!(cam.zoom, 0.1);
+        }
+
+        #[test]
+        fn degenerate_viewport_does_not_panic() {
+            let bbox = (0.0, 0.0, 100.0, 100.0);
+            let cam = fit_camera(bbox, 0.0, 0.0, 0.1);
+            assert!(cam.zoom.is_finite() && cam.x.is_finite() && cam.y.is_finite());
+        }
+
+        #[test]
+        fn multi_node_box_is_centered() {
+            let a = Node::new("a".to_string(), 0.0, 0.0, "".to_string());
+            let b = Node::new("b".to_string(), 1000.0, 1000.0, "".to_string());
+            let bbox = nodes_bounding_box(&[a, b]).unwrap();
+            let (cw, ch) = (800.0, 600.0);
+            let cam = fit_camera(bbox, cw, ch, 0.1);
+            // Viewport center should map to the box center.
+            let box_cx = (bbox.0 + bbox.2) / 2.0;
+            let box_cy = (bbox.1 + bbox.3) / 2.0;
+            let (vx, vy) = cam.screen_to_world(cw / 2.0, ch / 2.0);
+            assert!((vx - box_cx).abs() < 1e-6, "x center off: {vx} vs {box_cx}");
+            assert!((vy - box_cy).abs() < 1e-6, "y center off: {vy} vs {box_cy}");
+        }
+    }
+
+    mod camera_persist_tests {
+        use super::*;
+
+        #[test]
+        fn round_trips_a_camera() {
+            let cam = Camera { x: 123.0, y: -456.0, zoom: 1.75 };
+            let restored = CameraPersist::from_camera(&cam).to_camera();
+            assert_eq!(restored.x, 123.0);
+            assert_eq!(restored.y, -456.0);
+            assert_eq!(restored.zoom, 1.75);
+        }
+
+        #[test]
+        fn json_round_trip() {
+            let p = CameraPersist { x: 1.0, y: 2.0, zoom: 3.0 };
+            let json = serde_json::to_string(&p).unwrap();
+            let back: CameraPersist = serde_json::from_str(&json).unwrap();
+            assert_eq!(p, back);
+        }
+
+        #[test]
+        fn sanitizes_out_of_range_zoom() {
+            for bad in [0.0, -1.0, 99.0, f64::NAN, f64::INFINITY] {
+                let cam = CameraPersist { x: 5.0, y: 6.0, zoom: bad }.to_camera();
+                assert_eq!(cam.zoom, 1.0, "zoom {bad} not sanitized");
+                assert_eq!(cam.x, 5.0);
+                assert_eq!(cam.y, 6.0);
+            }
+        }
+
+        #[test]
+        fn sanitizes_non_finite_position() {
+            let cam = CameraPersist { x: f64::NAN, y: f64::INFINITY, zoom: 2.0 }.to_camera();
+            assert_eq!(cam.x, 0.0);
+            assert_eq!(cam.y, 0.0);
+            assert_eq!(cam.zoom, 2.0);
         }
     }
 }

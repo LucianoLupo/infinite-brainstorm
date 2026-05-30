@@ -142,6 +142,13 @@ impl Node {
         px >= self.x && px <= self.x + self.width && py >= self.y && py <= self.y + self.height
     }
 
+    /// World-space center of the node's bounding rectangle. Used by navigation
+    /// (recenter-on-search-match) and any code that needs to aim the camera at a
+    /// node rather than its top-left corner.
+    pub fn center(&self) -> (f64, f64) {
+        (self.x + self.width / 2.0, self.y + self.height / 2.0)
+    }
+
     pub fn auto_size(text: &str) -> (f64, f64) {
         let char_count = text.len().min(30);
         let width = ((char_count * 9 + 40) as f64).clamp(150.0, 400.0);
@@ -383,6 +390,32 @@ mod tests {
             assert_eq!(node.status, None);
             assert_eq!(node.group, None);
             assert_eq!(node.priority, None);
+        }
+
+        #[test]
+        fn center_is_rect_midpoint() {
+            let node = Node::new("n".to_string(), 100.0, 200.0, "".to_string());
+            // Default 200x100 -> center at (100+100, 200+50)
+            assert_eq!(node.center(), (200.0, 250.0));
+        }
+
+        #[test]
+        fn center_handles_negative_coordinates() {
+            let node = Node {
+                id: "n".to_string(),
+                x: -300.0,
+                y: -100.0,
+                width: 80.0,
+                height: 40.0,
+                text: "".to_string(),
+                node_type: NodeType::Text,
+                color: None,
+                tags: Vec::new(),
+                status: None,
+                group: None,
+                priority: None,
+            };
+            assert_eq!(node.center(), (-260.0, -80.0));
         }
 
         #[test]

@@ -83,6 +83,36 @@ async fn load_board_storage() -> LoadOutcome {
     }
 }
 
+/// Load the board from storage and commit it to the signals, applying the same
+/// outcome handling as startup load: auto-size nodes on success, clear the load
+/// error, and — crucially — leave the existing board untouched on a parse error
+/// so a malformed file can't be overwritten by the next save.
+///
+/// Shared by both the initial-load effect and the file-watcher reload path
+/// (immediate and deferred) so the three sites stay in lockstep.
+async fn reload_board_into(
+    set_board: WriteSignal<Board>,
+    load_error: RwSignal<Option<String>>,
+) {
+    match load_board_storage().await {
+        LoadOutcome::Loaded(mut loaded_board) => {
+            auto_size_nodes(&mut loaded_board);
+            load_error.set(None);
+            set_board.set(loaded_board);
+        }
+        LoadOutcome::Absent => {
+            load_error.set(None);
+            set_board.set(Board::default());
+        }
+        LoadOutcome::ParseError(msg) => {
+            // Keep the current board so the next save doesn't clobber the file
+            // being edited (externally or otherwise).
+            web_sys::console::error_1(&format!("Failed to parse board.json: {}", msg).into());
+            load_error.set(Some(msg));
+        }
+    }
+}
+
 /// Fill in zero `width`/`height` on freshly-loaded nodes using text-based auto-sizing.
 fn auto_size_nodes(board: &mut Board) {
     for node in &mut board.nodes {
@@ -591,6 +621,11 @@ pub fn App() -> impl IntoView {
     let (link_preview_trigger, set_link_preview_trigger) = signal(0u32);
     let load_error = RwSignal::<Option<String>>::new(None);
     let local_edit_pending = RwSignal::<bool>::new(false);
+    // Set when an external board-changed event arrives while a local interaction
+    // (drag/resize/edge-creation/text-edit) or a queued save is in flight. The
+    // reload is deferred and flushed by an effect once the interaction settles,
+    // so the watcher can never clobber an edit mid-gesture (P1.4 / F50).
+    let pending_external_reload = RwSignal::<bool>::new(false);
     let request_save = make_request_save(board, local_edit_pending);
 
     // Single mutation entry point shared by handlers and editor components.
@@ -633,58 +668,47 @@ pub fn App() -> impl IntoView {
         spawn_local(async move {
             // Small delay to ensure Tauri's __TAURI__ is injected
             gloo_timers::future::TimeoutFuture::new(50).await;
-            match load_board_storage().await {
-                LoadOutcome::Loaded(mut loaded_board) => {
-                    auto_size_nodes(&mut loaded_board);
-                    load_error.set(None);
-                    set_board.set(loaded_board);
-                }
-                LoadOutcome::Absent => {
-                    load_error.set(None);
-                    set_board.set(Board::default());
-                }
-                LoadOutcome::ParseError(msg) => {
-                    // Keep the existing board signal untouched so a malformed
-                    // file can't be overwritten by the next save.
-                    web_sys::console::error_1(
-                        &format!("Failed to parse board.json: {}", msg).into(),
-                    );
-                    load_error.set(Some(msg));
-                }
-            }
+            reload_board_into(set_board, load_error).await;
         });
     });
 
+    // True while a local interaction is mid-flight and a watcher reload would
+    // clobber the user's in-progress edit: an active drag/resize/edge-creation,
+    // inline text editing, or a queued/in-flight local save (P1.4 / F50). Read
+    // untracked so callers don't accidentally subscribe.
+    let interaction_in_flight = move || {
+        drag_state.get_untracked().is_dragging
+            || resize_state.get_untracked().is_resizing
+            || edge_creation.get_untracked().is_creating
+            || editing_node.get_untracked().is_some()
+            || local_edit_pending.get_untracked()
+    };
+
     // File watcher listener (Tauri only)
-    // Note: Backend handles skipping emissions for our own saves
+    // Note: Backend skips emissions for our own saves (content-hash match). Any
+    // event that reaches here is a genuine external change — but we still defer
+    // applying it if a local interaction is in flight so we don't overwrite an
+    // edit the user is actively making.
     Effect::new(move || {
         if !is_tauri() {
             return; // Skip file watching in browser mode
         }
 
         let handler = Closure::new(move |_event: JsValue| {
-            // Only external changes reach here (backend skips our own saves)
+            if interaction_in_flight() {
+                // Defer: record that an external change is waiting and let the
+                // flush effect apply it once the interaction settles. We do NOT
+                // reload now, or we'd clobber the in-progress edit (F50).
+                web_sys::console::log_1(
+                    &"External board change during interaction — deferring reload".into(),
+                );
+                pending_external_reload.set(true);
+                return;
+            }
+
             web_sys::console::log_1(&"External board change detected, reloading...".into());
             spawn_local(async move {
-                match load_board_storage().await {
-                    LoadOutcome::Loaded(mut loaded_board) => {
-                        auto_size_nodes(&mut loaded_board);
-                        load_error.set(None);
-                        set_board.set(loaded_board);
-                    }
-                    LoadOutcome::Absent => {
-                        load_error.set(None);
-                        set_board.set(Board::default());
-                    }
-                    LoadOutcome::ParseError(msg) => {
-                        // Malformed external edit: keep the current board so the
-                        // next save doesn't clobber the file the user is editing.
-                        web_sys::console::error_1(
-                            &format!("Failed to parse board.json: {}", msg).into(),
-                        );
-                        load_error.set(Some(msg));
-                    }
-                }
+                reload_board_into(set_board, load_error).await;
             });
         });
 
@@ -692,6 +716,30 @@ pub fn App() -> impl IntoView {
             let _ = listen("board-changed", &handler).await;
             handler.forget();
         });
+    });
+
+    // Deferred-reload flush: when an external change was deferred during an
+    // interaction, re-run the reload once the interaction settles. This effect
+    // subscribes (tracked) to every interaction signal plus the pending flag, so
+    // it re-evaluates whenever any of them change — e.g. on mouse-up ending a
+    // drag, on edit-commit clearing `editing_node`, or when the debounced save
+    // clears `local_edit_pending`.
+    Effect::new(move || {
+        // Tracked reads: re-run when any interaction state OR the pending flag
+        // changes.
+        let pending = pending_external_reload.get();
+        let busy = drag_state.get().is_dragging
+            || resize_state.get().is_resizing
+            || edge_creation.get().is_creating
+            || editing_node.get().is_some()
+            || local_edit_pending.get();
+
+        if pending && !busy {
+            pending_external_reload.set(false);
+            spawn_local(async move {
+                reload_board_into(set_board, load_error).await;
+            });
+        }
     });
 
     // Image loading effect

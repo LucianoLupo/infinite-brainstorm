@@ -1,17 +1,37 @@
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
-// Flag to skip file watcher emission after our own saves
-static SKIP_NEXT_EMIT: AtomicBool = AtomicBool::new(false);
+/// Hash of the exact bytes the app last wrote to `board.json` via
+/// `write_board_atomic`. The file watcher compares the on-disk content hash
+/// against this value: when they match, the change originated from our own save
+/// and we must NOT emit (re-emitting would reload our own write in a loop). An
+/// external edit produces a different hash and always emits.
+///
+/// This replaces the prior single-shot `SKIP_NEXT_EMIT` bool, which could only
+/// suppress ONE notify event per save — a single atomic rename can fan out into
+/// several events, and the surplus would leak through and trigger a self-reload.
+/// A content hash suppresses the self-write no matter how many events fire,
+/// while still letting a genuine external edit through immediately (F49/F93).
+static LAST_SELF_WRITE_HASH: Mutex<Option<u64>> = Mutex::new(None);
+
+/// Hash `content` with the std default hasher. Used both at save time (to record
+/// what we wrote) and in the watcher (to fingerprint the on-disk bytes).
+fn content_hash(content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
+}
 
 pub use brainstorm_types::{Board, Edge, LinkPreview, Node};
 
@@ -57,9 +77,11 @@ fn load_board(app: AppHandle) -> Result<Board, String> {
 /// the SAME directory, `fsync` it, then `rename` it over `path`. Because rename
 /// is atomic on the same filesystem, readers (and the file watcher) never
 /// observe a partially-written file. Before the rename, the prior on-disk
-/// contents are copied to `<path>.bak` (best-effort). The `SKIP_NEXT_EMIT` flag
-/// is set immediately before the rename — the atomic commit point — so the file
-/// watcher's debounce window only opens once the new contents are visible.
+/// contents are copied to `<path>.bak` (best-effort). The hash of the bytes we
+/// are about to commit is recorded in `LAST_SELF_WRITE_HASH` immediately before
+/// the rename — the atomic commit point — so the file watcher can recognize the
+/// resulting change as our own (by matching the on-disk content hash) and skip
+/// re-emitting it, no matter how many notify events the rename fans out into.
 pub fn write_board_atomic(path: &std::path::Path, board: &Board) -> Result<(), String> {
     use std::io::Write;
 
@@ -103,13 +125,20 @@ pub fn write_board_atomic(path: &std::path::Path, board: &Board) -> Result<(), S
         let _ = fs::copy(path, &bak_path);
     }
 
-    // Set the skip flag at the atomic commit point — immediately before rename.
-    SKIP_NEXT_EMIT.store(true, Ordering::SeqCst);
+    // Record the hash of the bytes we are committing at the atomic commit point
+    // — immediately before rename. The watcher matches the on-disk content hash
+    // against this to recognize (and skip) our own write. Snapshot the prior
+    // value so we can restore it if the rename fails.
+    let new_hash = content_hash(&json);
+    let prior_hash = {
+        let mut guard = LAST_SELF_WRITE_HASH.lock().unwrap_or_else(|p| p.into_inner());
+        guard.replace(new_hash)
+    };
 
     fs::rename(&tmp_path, path).map_err(|e| {
-        // The rename failed, so we never actually committed — undo the skip flag
-        // and clean up the temp file so we don't leave litter behind.
-        SKIP_NEXT_EMIT.store(false, Ordering::SeqCst);
+        // The rename failed, so we never actually committed — restore the prior
+        // self-write hash and clean up the temp file so we don't leave litter.
+        *LAST_SELF_WRITE_HASH.lock().unwrap_or_else(|p| p.into_inner()) = prior_hash;
         let _ = fs::remove_file(&tmp_path);
         e.to_string()
     })?;
@@ -625,10 +654,12 @@ fn paste_image(app: AppHandle) -> Result<PasteImageResult, String> {
 /// decide whether to emit a `board-changed` notification to the frontend.
 ///
 /// Two rules, in order:
-/// 1. **Skip-our-own-save**: if `skip` is set (the app just wrote the file via
-///    `write_board_atomic`, which flips `SKIP_NEXT_EMIT`), we never emit — that
-///    change originated from us and re-emitting would cause a reload feedback
-///    loop. The caller is responsible for *consuming* (swapping) the flag.
+/// 1. **Skip-our-own-save**: if `skip` is set, the on-disk content matched the
+///    bytes we last wrote ourselves (see [`is_self_write`] /
+///    `LAST_SELF_WRITE_HASH`), so the change originated from us — never emit, or
+///    the frontend reloads its own write in a loop. Unlike the old single-shot
+///    flag, hash matching suppresses *every* notify event a single save fans out
+///    into, while an external edit (different hash) always passes through.
 /// 2. **Debounce**: a single save can produce several filesystem events. We only
 ///    emit if at least `debounce` has elapsed since `last_emit` (or there was no
 ///    prior emit). `now == last_emit + debounce` exactly is treated as elapsed.
@@ -648,6 +679,22 @@ pub fn should_emit_change(
         Some(t) => now.duration_since(t) >= debounce,
         None => true,
     }
+}
+
+/// Pure decision: is this on-disk change our own save?
+///
+/// `disk_hash` is [`content_hash`] of the bytes currently on disk; `last_self`
+/// is the hash recorded by the most recent [`write_board_atomic`] (or `None` if
+/// the app has not saved yet). Returns `true` only when both are present and
+/// equal — i.e. the file on disk is exactly what we last wrote, so the watcher
+/// should treat the event as a self-write and skip emitting.
+///
+/// An external edit changes the bytes (different hash) and yields `false`, so it
+/// always reloads. Kept separate from `should_emit_change` so the hash-matching
+/// rule is independently unit-tested (external write -> emit, self write -> no
+/// emit).
+pub fn is_self_write(disk_hash: u64, last_self: Option<u64>) -> bool {
+    last_self == Some(disk_hash)
 }
 
 fn setup_file_watcher(app: AppHandle) {
@@ -686,13 +733,30 @@ fn setup_file_watcher(app: AppHandle) {
                         if is_board_file {
                             match event.kind {
                                 notify::EventKind::Modify(_) | notify::EventKind::Create(_) => {
-                                    // Consume the skip flag (set by our own save) and let the
-                                    // pure decision core apply the skip + debounce rules.
-                                    let was_skip_set = SKIP_NEXT_EMIT.swap(false, Ordering::SeqCst);
+                                    // Fingerprint the bytes on disk and compare against the
+                                    // hash of our own last write. A match means this event is
+                                    // the app's own save — skip emitting (no reload loop). A
+                                    // mismatch (or unreadable file mid-rename) is treated as an
+                                    // external edit and reloads. The hash check is read-only and
+                                    // idempotent, so the surplus events a single atomic rename
+                                    // fans out into are all suppressed, not just the first.
+                                    let is_own_save = match fs::read_to_string(&board_path) {
+                                        Ok(content) => {
+                                            let last_self = *LAST_SELF_WRITE_HASH
+                                                .lock()
+                                                .unwrap_or_else(|p| p.into_inner());
+                                            is_self_write(content_hash(&content), last_self)
+                                        }
+                                        // Couldn't read (e.g. transient state during the rename
+                                        // swap): err toward reloading rather than swallowing a
+                                        // real external change.
+                                        Err(_) => false,
+                                    };
+
                                     let now = std::time::Instant::now();
 
                                     if should_emit_change(
-                                        was_skip_set,
+                                        is_own_save,
                                         last_emit,
                                         now,
                                         debounce_duration,
@@ -700,6 +764,12 @@ fn setup_file_watcher(app: AppHandle) {
                                         last_emit = Some(now);
                                         std::thread::sleep(Duration::from_millis(100));
                                         let _ = app.emit("board-changed", ());
+                                    } else if is_own_save {
+                                        // Record the timestamp even when we suppress our own
+                                        // save, so a trailing duplicate notify event arriving
+                                        // just after is debounced rather than slipping through
+                                        // (the file hash now matches, but defense in depth).
+                                        last_emit = Some(now);
                                     }
                                 }
                                 _ => {}

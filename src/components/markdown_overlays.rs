@@ -1,16 +1,17 @@
 use leptos::prelude::*;
-use crate::app::{BoardCtx, is_local_md_file, parse_markdown};
+use crate::app::{BoardDataCtx, EditingCtx, is_local_md_file, parse_markdown};
 use crate::state::NodeType;
 
 #[component]
 pub fn MarkdownOverlays() -> impl IntoView {
-    let ctx = use_context::<BoardCtx>().unwrap();
+    let board_ctx = use_context::<BoardDataCtx>().unwrap();
+    let editing_ctx = use_context::<EditingCtx>().unwrap();
 
     move || {
-        let b = ctx.board.get();
-        let cam = ctx.camera.get();
-        let current_editing = ctx.editing_node.get();
-        let md_cache = ctx.md_file_cache.get();
+        let b = board_ctx.board.get();
+        let cam = board_ctx.camera.get();
+        let current_editing = editing_ctx.editing_node.get();
+        let md_cache = editing_ctx.md_file_cache.get();
 
         b.nodes
             .iter()

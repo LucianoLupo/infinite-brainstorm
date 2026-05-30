@@ -1,11 +1,12 @@
 use leptos::prelude::*;
-use crate::app::{BoardCtx, is_local_md_file, parse_markdown};
+use crate::app::{BoardDataCtx, EditingCtx, is_local_md_file, parse_markdown};
 use crate::interaction::BoardAction;
 use crate::state::NodeType;
 
 #[component]
 pub fn MarkdownModal() -> impl IntoView {
-    let ctx = use_context::<BoardCtx>().unwrap();
+    let board_ctx = use_context::<BoardDataCtx>().unwrap();
+    let ctx = use_context::<EditingCtx>().unwrap();
 
     move || {
         if let Some((node_id, is_editing)) = ctx.modal_md.get() {
@@ -73,7 +74,7 @@ pub fn MarkdownModal() -> impl IntoView {
                                         </button>
                                     }.into_any()
                                 } else {
-                                    let b = ctx.board.get();
+                                    let b = board_ctx.board.get();
                                     let is_md_link = b.nodes.iter()
                                         .find(|n| n.id == node_id)
                                         .map(|n| n.node_type == NodeType::Link && is_local_md_file(&n.text))
@@ -90,7 +91,7 @@ pub fn MarkdownModal() -> impl IntoView {
                                                        padding: 8px 16px; cursor: pointer; \
                                                        font-family: inherit; font-size: 12px; font-weight: bold;"
                                                 on:click=move |_| {
-                                                    let b = ctx.board.get_untracked();
+                                                    let b = board_ctx.board.get_untracked();
                                                     if let Some((id, _)) = ctx.modal_md.get_untracked() {
                                                         if let Some(n) = b.nodes.iter().find(|n| n.id == id) {
                                                             ctx.set_md_edit_text.set(n.text.clone());
@@ -137,7 +138,7 @@ pub fn MarkdownModal() -> impl IntoView {
                                         />
                                     }.into_any()
                                 } else {
-                                    let b = ctx.board.get();
+                                    let b = board_ctx.board.get();
                                     let md_cache_content = ctx.md_file_cache.get();
                                     let content = b.nodes.iter()
                                         .find(|n| n.id == nid)

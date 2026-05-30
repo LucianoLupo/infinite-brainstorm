@@ -1,17 +1,18 @@
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
-use crate::app::BoardCtx;
+use crate::app::{BoardDataCtx, EditingCtx};
 use crate::interaction::BoardAction;
 use crate::state::NodeType;
 
 #[component]
 pub fn NodeEditor() -> impl IntoView {
-    let ctx = use_context::<BoardCtx>().unwrap();
+    let board_ctx = use_context::<BoardDataCtx>().unwrap();
+    let ctx = use_context::<EditingCtx>().unwrap();
 
     move || {
         if let Some(node_id) = ctx.editing_node.get() {
-            let b = ctx.board.get();
-            let cam = ctx.camera.get();
+            let b = board_ctx.board.get();
+            let cam = board_ctx.camera.get();
             if let Some(node) = b.nodes.iter().find(|n| n.id == node_id) {
                 let (screen_x, screen_y) = cam.world_to_screen(node.x, node.y);
                 let screen_w = node.width * cam.zoom;

@@ -1,9 +1,9 @@
 use leptos::prelude::*;
-use crate::app::BoardCtx;
+use crate::app::EditingCtx;
 
 #[component]
 pub fn ImageModal() -> impl IntoView {
-    let ctx = use_context::<BoardCtx>().unwrap();
+    let ctx = use_context::<EditingCtx>().unwrap();
 
     move || {
         ctx.modal_image.get().map(|image_url| {

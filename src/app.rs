@@ -1,4 +1,4 @@
-use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache};
+use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache, RenderState};
 use crate::components::{ErrorBanner, ImageModal, MarkdownModal, MarkdownOverlays, NodeEditor, SearchOverlay};
 use crate::history::History;
 use crate::interaction::{reduce, BoardAction, SideEffect};
@@ -100,7 +100,7 @@ async fn reload_board_into(
 ) {
     match load_board_storage().await {
         LoadOutcome::Loaded(mut loaded_board) => {
-            auto_size_nodes(&mut loaded_board);
+            loaded_board.apply_auto_size();
             load_error.set(None);
             set_board.set(loaded_board);
         }
@@ -113,21 +113,6 @@ async fn reload_board_into(
             // being edited (externally or otherwise).
             web_sys::console::error_1(&format!("Failed to parse board.json: {}", msg).into());
             load_error.set(Some(msg));
-        }
-    }
-}
-
-/// Fill in zero `width`/`height` on freshly-loaded nodes using text-based auto-sizing.
-fn auto_size_nodes(board: &mut Board) {
-    for node in &mut board.nodes {
-        if node.width == 0.0 || node.height == 0.0 {
-            let (w, h) = Node::auto_size(&node.text);
-            if node.width == 0.0 {
-                node.width = w;
-            }
-            if node.height == 0.0 {
-                node.height = h;
-            }
         }
     }
 }
@@ -271,7 +256,7 @@ type BoardHistory = Rc<RefCell<History<Snapshot>>>;
 ///
 /// The history `Rc` is `!Send`, so — like [`RequestSave`] — it is parked in
 /// thread-local `LocalStorage` arena storage, which keeps this struct `Copy` and
-/// cheap to stash in [`BoardCtx`] for the editor components to dispatch through.
+/// cheap to stash in [`EditingCtx`] for the editor components to dispatch through.
 #[derive(Clone, Copy)]
 pub struct Dispatcher {
     board: ReadSignal<Board>,
@@ -706,16 +691,42 @@ impl CameraPersist {
     }
 }
 
+/// Board data + viewport + persistence. The shared "document" surface that every
+/// component reading or mutating the canvas needs. Split out of the former
+/// monolithic `BoardCtx` (P3.2 / F32) so a component pulls in only the slice it
+/// uses via `use_context::<BoardDataCtx>()` instead of the whole grab-bag.
 #[derive(Clone, Copy)]
-pub struct BoardCtx {
+pub struct BoardDataCtx {
     pub board: ReadSignal<Board>,
     pub set_board: WriteSignal<Board>,
     pub camera: ReadSignal<Camera>,
     pub set_camera: WriteSignal<Camera>,
+    /// Centralized debounced persistence sink. Call this after mutating the board
+    /// signal instead of invoking `save_board_storage` directly.
+    pub request_save: RequestSave,
+    /// True while a debounced local write is queued or in flight. The file watcher
+    /// can check this to avoid reloading over the user's own pending edits.
+    pub local_edit_pending: RwSignal<bool>,
+}
+
+/// Selection state: which nodes/edges are selected, plus the search overlay
+/// query that drives the highlighted-match selection (P2.4 / F99).
+#[derive(Clone, Copy)]
+pub struct SelectionCtx {
     pub selected_nodes: ReadSignal<HashSet<String>>,
     pub set_selected_nodes: WriteSignal<HashSet<String>>,
     pub selected_edge: ReadSignal<Option<String>>,
     pub set_selected_edge: WriteSignal<Option<String>>,
+    /// Search overlay query (P2.4 / F99). `Some(query)` while open; `None` closed.
+    pub search_query: ReadSignal<Option<String>>,
+    pub set_search_query: WriteSignal<Option<String>>,
+}
+
+/// Editing surfaces: inline text editing, the image/markdown modals, the
+/// markdown-edit buffer + local-`.md` cache, the load-error banner signal, and
+/// the single mutation dispatcher the editor components commit through.
+#[derive(Clone, Copy)]
+pub struct EditingCtx {
     pub editing_node: ReadSignal<Option<String>>,
     pub set_editing_node: WriteSignal<Option<String>>,
     pub modal_image: ReadSignal<Option<String>>,
@@ -728,18 +739,38 @@ pub struct BoardCtx {
     /// Most recent board.json parse error (if any). Set on a failed load so the
     /// error banner can surface it; cleared on the next successful load.
     pub load_error: RwSignal<Option<String>>,
-    /// Centralized debounced persistence sink. Call this after mutating the board
-    /// signal instead of invoking `save_board_storage` directly.
-    pub request_save: RequestSave,
-    /// True while a debounced local write is queued or in flight. The file watcher
-    /// can check this to avoid reloading over the user's own pending edits.
-    pub local_edit_pending: RwSignal<bool>,
     /// Single mutation entry point. Editor components dispatch text edits through
     /// this so each commit snapshots undo history (fixes undo dropping typed text).
     pub dispatch: Dispatcher,
-    /// Search overlay query (P2.4 / F99). `Some(query)` while open; `None` closed.
-    pub search_query: ReadSignal<Option<String>>,
-    pub set_search_query: WriteSignal<Option<String>>,
+}
+
+/// Resolve the canvas-relative screen position of a pointer event, or `None` if
+/// the canvas isn't mounted yet. `let-else` keeps the handlers branch-free and
+/// removes the `canvas_ref.get().unwrap()` panic sites (P3.2 / F8). Accepts any
+/// event that derefs to [`web_sys::MouseEvent`] (covers `WheelEvent`).
+fn event_canvas_pos(
+    canvas_ref: NodeRef<leptos::html::Canvas>,
+    ev: &web_sys::MouseEvent,
+) -> Option<(f64, f64)> {
+    let canvas = canvas_ref.get()?;
+    let rect = canvas.get_bounding_client_rect();
+    Some((
+        ev.client_x() as f64 - rect.left(),
+        ev.client_y() as f64 - rect.top(),
+    ))
+}
+
+/// Resolve the world-space position of a pointer event by mapping its
+/// canvas-relative screen position through `camera`. `None` when the canvas
+/// isn't mounted. Built on [`event_canvas_pos`]; together they let handlers
+/// obtain coordinates without unwrapping the node ref (P3.2 / F8).
+fn event_world_pos(
+    canvas_ref: NodeRef<leptos::html::Canvas>,
+    camera: &Camera,
+    ev: &web_sys::MouseEvent,
+) -> Option<(f64, f64)> {
+    let (canvas_x, canvas_y) = event_canvas_pos(canvas_ref, ev)?;
+    Some(camera.screen_to_world(canvas_x, canvas_y))
 }
 
 #[component]
@@ -828,15 +859,23 @@ pub fn App() -> impl IntoView {
         request_save,
     };
 
-    provide_context(BoardCtx {
+    provide_context(BoardDataCtx {
         board,
         set_board,
         camera,
         set_camera,
+        request_save,
+        local_edit_pending,
+    });
+    provide_context(SelectionCtx {
         selected_nodes,
         set_selected_nodes,
         selected_edge,
         set_selected_edge,
+        search_query,
+        set_search_query,
+    });
+    provide_context(EditingCtx {
         editing_node,
         set_editing_node,
         modal_image,
@@ -847,11 +886,7 @@ pub fn App() -> impl IntoView {
         set_md_edit_text,
         md_file_cache,
         load_error,
-        request_save,
-        local_edit_pending,
         dispatch,
-        search_query,
-        set_search_query,
     });
 
     // Load board on startup (with small delay to ensure Tauri is ready).
@@ -1180,25 +1215,23 @@ pub fn App() -> impl IntoView {
                 }
 
                 if let Ok(ctx) = get_canvas_context(canvas_el) {
-                    render_board(
-                        &ctx,
-                        canvas_el,
-                        &current_board,
-                        &current_camera,
-                        &current_selected,
-                        current_selected_edge.as_ref(),
-                        current_editing.as_ref(),
-                        current_edge_creation.is_creating.then_some({
-                            (
-                                current_edge_creation.from_node_id.as_ref(),
-                                current_edge_creation.current_x,
-                                current_edge_creation.current_y,
-                            )
-                        }),
-                        current_selection_box,
-                        &image_cache_for_render,
-                        &link_preview_cache_for_render,
-                    );
+                    render_board(RenderState {
+                        ctx: &ctx,
+                        canvas: canvas_el,
+                        board: &current_board,
+                        camera: &current_camera,
+                        selected_nodes: &current_selected,
+                        selected_edge: current_selected_edge.as_ref(),
+                        editing_node: current_editing.as_ref(),
+                        edge_preview: current_edge_creation.is_creating.then_some((
+                            current_edge_creation.from_node_id.as_ref(),
+                            current_edge_creation.current_x,
+                            current_edge_creation.current_y,
+                        )),
+                        selection_box: current_selection_box,
+                        image_cache: &image_cache_for_render,
+                        link_preview_cache: &link_preview_cache_for_render,
+                    });
                 }
             }
         }) as Box<dyn FnMut()>);
@@ -1247,7 +1280,9 @@ pub fn App() -> impl IntoView {
             return;
         }
 
-        let canvas = canvas_ref.get().unwrap();
+        let Some(canvas) = canvas_ref.get() else {
+            return;
+        };
         let _ = canvas.focus();
         let rect = canvas.get_bounding_client_rect();
         let canvas_x = ev.client_x() as f64 - rect.left();
@@ -1394,10 +1429,9 @@ pub fn App() -> impl IntoView {
     };
 
     let on_mouse_move = move |ev: web_sys::MouseEvent| {
-        let canvas = canvas_ref.get().unwrap();
-        let rect = canvas.get_bounding_client_rect();
-        let canvas_x = ev.client_x() as f64 - rect.left();
-        let canvas_y = ev.client_y() as f64 - rect.top();
+        let Some((canvas_x, canvas_y)) = event_canvas_pos(canvas_ref, &ev) else {
+            return;
+        };
 
         let current_drag = drag_state.get_untracked();
         let current_pan = pan_state.get_untracked();
@@ -1558,24 +1592,25 @@ pub fn App() -> impl IntoView {
 
         if edge_state.is_creating {
             if let Some(from_id) = &edge_state.from_node_id {
-                let canvas = canvas_ref.get().unwrap();
-                let rect = canvas.get_bounding_client_rect();
-                let canvas_x = ev.client_x() as f64 - rect.left();
-                let canvas_y = ev.client_y() as f64 - rect.top();
                 let cam = camera.get_untracked();
-                let (world_x, world_y) = cam.screen_to_world(canvas_x, canvas_y);
-
-                let current_board = board.get_untracked();
-                if let Some(target) = current_board.nodes.iter().rev().find(|n| n.contains_point(world_x, world_y)) {
-                    if &target.id != from_id {
-                        dispatch.apply(
-                            BoardAction::CreateEdge {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                from_node: from_id.clone(),
-                                to_node: target.id.clone(),
-                            },
-                            None,
-                        );
+                if let Some((world_x, world_y)) = event_world_pos(canvas_ref, &cam, &ev) {
+                    let current_board = board.get_untracked();
+                    if let Some(target) = current_board
+                        .nodes
+                        .iter()
+                        .rev()
+                        .find(|n| n.contains_point(world_x, world_y))
+                    {
+                        if &target.id != from_id {
+                            dispatch.apply(
+                                BoardAction::CreateEdge {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    from_node: from_id.clone(),
+                                    to_node: target.id.clone(),
+                                },
+                                None,
+                            );
+                        }
                     }
                 }
             }
@@ -1731,10 +1766,9 @@ pub fn App() -> impl IntoView {
     let on_wheel = move |ev: web_sys::WheelEvent| {
         ev.prevent_default();
 
-        let canvas = canvas_ref.get().unwrap();
-        let rect = canvas.get_bounding_client_rect();
-        let canvas_x = ev.client_x() as f64 - rect.left();
-        let canvas_y = ev.client_y() as f64 - rect.top();
+        let Some((canvas_x, canvas_y)) = event_canvas_pos(canvas_ref, &ev) else {
+            return;
+        };
 
         let zoom_factor = if ev.delta_y() < 0.0 { 1.1 } else { 0.9 };
 
@@ -1754,13 +1788,10 @@ pub fn App() -> impl IntoView {
     let on_double_click = {
         let image_cache_for_modal = image_cache_for_modal.clone();
         move |ev: web_sys::MouseEvent| {
-            let canvas = canvas_ref.get().unwrap();
-            let rect = canvas.get_bounding_client_rect();
-            let canvas_x = ev.client_x() as f64 - rect.left();
-            let canvas_y = ev.client_y() as f64 - rect.top();
-
             let cam = camera.get_untracked();
-            let (world_x, world_y) = cam.screen_to_world(canvas_x, canvas_y);
+            let Some((world_x, world_y)) = event_world_pos(canvas_ref, &cam, &ev) else {
+                return;
+            };
 
             let current_board = board.get_untracked();
             let clicked_node = current_board

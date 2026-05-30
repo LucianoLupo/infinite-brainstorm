@@ -1,4 +1,4 @@
-use crate::app::{node_matches_query, BoardCtx};
+use crate::app::{node_matches_query, BoardDataCtx, SelectionCtx};
 use crate::state::Camera;
 use leptos::prelude::*;
 use std::collections::HashSet;
@@ -34,12 +34,13 @@ fn center_camera_on(cam: &Camera, wx: f64, wy: f64) -> Option<Camera> {
 /// order); Escape closes the overlay and clears the highlight.
 #[component]
 pub fn SearchOverlay() -> impl IntoView {
-    let ctx = use_context::<BoardCtx>().unwrap();
+    let board_ctx = use_context::<BoardDataCtx>().unwrap();
+    let sel_ctx = use_context::<SelectionCtx>().unwrap();
 
     // Recompute matches for `query`, push them into the selection highlight, and
     // return the ids in board order (so "first match" is deterministic).
     let apply_matches = move |query: &str| -> Vec<String> {
-        let board = ctx.board.get_untracked();
+        let board = board_ctx.board.get_untracked();
         let ids: Vec<String> = board
             .nodes
             .iter()
@@ -47,7 +48,7 @@ pub fn SearchOverlay() -> impl IntoView {
             .map(|n| n.id.clone())
             .collect();
         let set: HashSet<String> = ids.iter().cloned().collect();
-        ctx.set_selected_nodes.set(set);
+        sel_ctx.set_selected_nodes.set(set);
         ids
     };
 
@@ -56,7 +57,7 @@ pub fn SearchOverlay() -> impl IntoView {
             if let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() {
                 let q = input.value();
                 apply_matches(&q);
-                ctx.set_search_query.set(Some(q));
+                sel_ctx.set_search_query.set(Some(q));
             }
         }
     };
@@ -65,30 +66,30 @@ pub fn SearchOverlay() -> impl IntoView {
         match ev.key().as_str() {
             "Enter" => {
                 ev.prevent_default();
-                let query = ctx.search_query.get_untracked().unwrap_or_default();
+                let query = sel_ctx.search_query.get_untracked().unwrap_or_default();
                 let ids = apply_matches(&query);
                 if let Some(first_id) = ids.first() {
-                    let board = ctx.board.get_untracked();
+                    let board = board_ctx.board.get_untracked();
                     if let Some(node) = board.nodes.iter().find(|n| &n.id == first_id) {
                         let (wx, wy) = node.center();
-                        let cam = ctx.camera.get_untracked();
+                        let cam = board_ctx.camera.get_untracked();
                         if let Some(next) = center_camera_on(&cam, wx, wy) {
-                            ctx.set_camera.set(next);
+                            board_ctx.set_camera.set(next);
                         }
                     }
                 }
             }
             "Escape" => {
                 ev.prevent_default();
-                ctx.set_selected_nodes.set(HashSet::new());
-                ctx.set_search_query.set(None);
+                sel_ctx.set_selected_nodes.set(HashSet::new());
+                sel_ctx.set_search_query.set(None);
             }
             _ => {}
         }
     };
 
     move || {
-        ctx.search_query.get().map(|query| {
+        sel_ctx.search_query.get().map(|query| {
             view! {
                 <div style="position: fixed; top: 16px; left: 50%; transform: translateX(-50%); \
                             z-index: 250; background: #051005; border: 1px solid #2a4a3a; \

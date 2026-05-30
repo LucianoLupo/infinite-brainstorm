@@ -1,15 +1,15 @@
 use leptos::prelude::*;
-use crate::app::BoardCtx;
+use crate::app::EditingCtx;
 
 /// Non-blocking banner that surfaces a board.json parse error.
 ///
-/// Reads `load_error` from [`BoardCtx`]. While set, it renders a dismissible
+/// Reads `load_error` from [`EditingCtx`]. While set, it renders a dismissible
 /// banner explaining that the board failed to parse and that the current
 /// in-memory board is being preserved. It clears automatically on the next
 /// successful load (the load path resets `load_error` to `None`).
 #[component]
 pub fn ErrorBanner() -> impl IntoView {
-    let ctx = use_context::<BoardCtx>().unwrap();
+    let ctx = use_context::<EditingCtx>().unwrap();
     let load_error = ctx.load_error;
 
     move || {

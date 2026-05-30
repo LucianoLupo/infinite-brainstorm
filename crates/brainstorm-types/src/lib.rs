@@ -96,6 +96,27 @@ pub struct Board {
     pub edges: Vec<Edge>,
 }
 
+impl Board {
+    /// Fill in zero `width`/`height` on freshly-loaded nodes using text-based
+    /// auto-sizing. Agents (and hand-edited `board.json` files) may omit the
+    /// dimensions entirely; `#[serde(default)]` deserializes those to `0.0`,
+    /// and this pass replaces only the missing axis so any explicit dimension
+    /// is preserved. Idempotent: once both axes are non-zero it's a no-op.
+    pub fn apply_auto_size(&mut self) {
+        for node in &mut self.nodes {
+            if node.width == 0.0 || node.height == 0.0 {
+                let (w, h) = Node::auto_size(&node.text);
+                if node.width == 0.0 {
+                    node.width = w;
+                }
+                if node.height == 0.0 {
+                    node.height = h;
+                }
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Node {
     pub id: String,
@@ -609,6 +630,82 @@ mod tests {
             let board: Board = serde_json::from_str(json).unwrap();
             assert_eq!(board.nodes[0].width, 0.0);
             assert_eq!(board.nodes[0].height, 0.0);
+        }
+
+        #[test]
+        fn apply_auto_size_fills_zero_dimensions() {
+            let json = r#"{
+                "nodes": [{
+                    "id": "n1",
+                    "x": 100, "y": 200,
+                    "text": "Agent-created node", "node_type": "idea"
+                }],
+                "edges": []
+            }"#;
+            let mut board: Board = serde_json::from_str(json).unwrap();
+            assert_eq!(board.nodes[0].width, 0.0);
+            assert_eq!(board.nodes[0].height, 0.0);
+
+            board.apply_auto_size();
+
+            let (expected_w, expected_h) = Node::auto_size("Agent-created node");
+            assert_eq!(board.nodes[0].width, expected_w);
+            assert_eq!(board.nodes[0].height, expected_h);
+        }
+
+        #[test]
+        fn apply_auto_size_preserves_explicit_dimensions() {
+            let mut board = Board {
+                nodes: vec![Node {
+                    id: "n1".to_string(),
+                    x: 0.0,
+                    y: 0.0,
+                    width: 321.0,
+                    height: 123.0,
+                    text: "Sized".to_string(),
+                    node_type: NodeType::Text,
+                    color: None,
+                    tags: Vec::new(),
+                    status: None,
+                    group: None,
+                    priority: None,
+                }],
+                edges: vec![],
+            };
+
+            board.apply_auto_size();
+
+            // Both axes were non-zero, so the pass is a no-op.
+            assert_eq!(board.nodes[0].width, 321.0);
+            assert_eq!(board.nodes[0].height, 123.0);
+        }
+
+        #[test]
+        fn apply_auto_size_fills_only_missing_axis() {
+            // Width supplied, height omitted (0.0): only height is computed.
+            let mut board = Board {
+                nodes: vec![Node {
+                    id: "n1".to_string(),
+                    x: 0.0,
+                    y: 0.0,
+                    width: 275.0,
+                    height: 0.0,
+                    text: "Half".to_string(),
+                    node_type: NodeType::Text,
+                    color: None,
+                    tags: Vec::new(),
+                    status: None,
+                    group: None,
+                    priority: None,
+                }],
+                edges: vec![],
+            };
+
+            board.apply_auto_size();
+
+            let (_w, expected_h) = Node::auto_size("Half");
+            assert_eq!(board.nodes[0].width, 275.0, "explicit width must be kept");
+            assert_eq!(board.nodes[0].height, expected_h, "missing height auto-sized");
         }
 
         #[test]

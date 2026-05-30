@@ -81,19 +81,41 @@ fn edge_outside_viewport(
     }
 }
 
-pub fn render_board(
-    ctx: &CanvasRenderingContext2d,
-    canvas: &HtmlCanvasElement,
-    board: &Board,
-    camera: &Camera,
-    selected_nodes: &HashSet<String>,
-    selected_edge: Option<&String>,
-    editing_node: Option<&String>,
-    edge_preview: Option<(Option<&String>, f64, f64)>,
-    selection_box: Option<(f64, f64, f64, f64)>,
-    image_cache: &ImageCache,
-    link_preview_cache: &LinkPreviewCache,
-) {
+/// All inputs to a single [`render_board`] pass, bundled into one named-field
+/// struct. Using named fields (rather than a long positional argument list)
+/// makes a tuple-transposition mistake at the call site impossible: every input
+/// is labeled, so e.g. `selected_nodes` and `editing_node` can't be swapped.
+pub struct RenderState<'a> {
+    pub ctx: &'a CanvasRenderingContext2d,
+    pub canvas: &'a HtmlCanvasElement,
+    pub board: &'a Board,
+    pub camera: &'a Camera,
+    pub selected_nodes: &'a HashSet<String>,
+    pub selected_edge: Option<&'a String>,
+    pub editing_node: Option<&'a String>,
+    /// In-progress edge being dragged: `(from_node_id, cursor_screen_x, cursor_screen_y)`.
+    pub edge_preview: Option<(Option<&'a String>, f64, f64)>,
+    /// Active box-selection rectangle in world coords: `(min_x, min_y, max_x, max_y)`.
+    pub selection_box: Option<(f64, f64, f64, f64)>,
+    pub image_cache: &'a ImageCache,
+    pub link_preview_cache: &'a LinkPreviewCache,
+}
+
+pub fn render_board(state: RenderState) {
+    let RenderState {
+        ctx,
+        canvas,
+        board,
+        camera,
+        selected_nodes,
+        selected_edge,
+        editing_node,
+        edge_preview,
+        selection_box,
+        image_cache,
+        link_preview_cache,
+    } = state;
+
     let width = canvas.width() as f64;
     let height = canvas.height() as f64;
 

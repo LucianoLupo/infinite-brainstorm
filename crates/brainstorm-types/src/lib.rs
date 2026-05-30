@@ -491,7 +491,11 @@ mod tests {
         #[test]
         fn screen_to_world_guards_zero_zoom() {
             // A zoom of 0 would divide by zero; the guard falls back to 1.0.
-            let cam = Camera { x: 10.0, y: 20.0, zoom: 0.0 };
+            let cam = Camera {
+                x: 10.0,
+                y: 20.0,
+                zoom: 0.0,
+            };
             let (wx, wy) = cam.screen_to_world(100.0, 200.0);
             assert!(wx.is_finite() && wy.is_finite());
             assert_eq!(wx, 110.0);
@@ -501,9 +505,16 @@ mod tests {
         #[test]
         fn screen_to_world_guards_nan_and_negative_zoom() {
             for bad in [f64::NAN, f64::INFINITY, -2.0] {
-                let cam = Camera { x: 0.0, y: 0.0, zoom: bad };
+                let cam = Camera {
+                    x: 0.0,
+                    y: 0.0,
+                    zoom: bad,
+                };
                 let (wx, wy) = cam.screen_to_world(50.0, 50.0);
-                assert!(wx.is_finite() && wy.is_finite(), "zoom {bad} produced non-finite");
+                assert!(
+                    wx.is_finite() && wy.is_finite(),
+                    "zoom {bad} produced non-finite"
+                );
                 assert_eq!(wx, 50.0);
                 assert_eq!(wy, 50.0);
             }
@@ -527,7 +538,11 @@ mod tests {
 
         #[test]
         fn screen_to_world_with_pan() {
-            let cam = Camera { x: 50.0, y: 100.0, zoom: 1.0 };
+            let cam = Camera {
+                x: 50.0,
+                y: 100.0,
+                zoom: 1.0,
+            };
             let (wx, wy) = cam.screen_to_world(100.0, 200.0);
             assert_eq!(wx, 150.0);
             assert_eq!(wy, 300.0);
@@ -535,7 +550,11 @@ mod tests {
 
         #[test]
         fn world_to_screen_with_pan() {
-            let cam = Camera { x: 50.0, y: 100.0, zoom: 1.0 };
+            let cam = Camera {
+                x: 50.0,
+                y: 100.0,
+                zoom: 1.0,
+            };
             let (sx, sy) = cam.world_to_screen(150.0, 300.0);
             assert_eq!(sx, 100.0);
             assert_eq!(sy, 200.0);
@@ -543,7 +562,11 @@ mod tests {
 
         #[test]
         fn screen_to_world_with_zoom() {
-            let cam = Camera { x: 0.0, y: 0.0, zoom: 2.0 };
+            let cam = Camera {
+                x: 0.0,
+                y: 0.0,
+                zoom: 2.0,
+            };
             let (wx, wy) = cam.screen_to_world(200.0, 400.0);
             assert_eq!(wx, 100.0);
             assert_eq!(wy, 200.0);
@@ -551,7 +574,11 @@ mod tests {
 
         #[test]
         fn world_to_screen_with_zoom() {
-            let cam = Camera { x: 0.0, y: 0.0, zoom: 2.0 };
+            let cam = Camera {
+                x: 0.0,
+                y: 0.0,
+                zoom: 2.0,
+            };
             let (sx, sy) = cam.world_to_screen(100.0, 200.0);
             assert_eq!(sx, 200.0);
             assert_eq!(sy, 400.0);
@@ -559,7 +586,11 @@ mod tests {
 
         #[test]
         fn round_trip_screen_world_screen() {
-            let cam = Camera { x: 123.0, y: 456.0, zoom: 1.5 };
+            let cam = Camera {
+                x: 123.0,
+                y: 456.0,
+                zoom: 1.5,
+            };
             let (wx, wy) = cam.screen_to_world(300.0, 400.0);
             let (sx, sy) = cam.world_to_screen(wx, wy);
             assert!((sx - 300.0).abs() < 1e-10);
@@ -568,7 +599,11 @@ mod tests {
 
         #[test]
         fn round_trip_world_screen_world() {
-            let cam = Camera { x: 123.0, y: 456.0, zoom: 1.5 };
+            let cam = Camera {
+                x: 123.0,
+                y: 456.0,
+                zoom: 1.5,
+            };
             let (sx, sy) = cam.world_to_screen(500.0, 600.0);
             let (wx, wy) = cam.screen_to_world(sx, sy);
             assert!((wx - 500.0).abs() < 1e-10);
@@ -660,10 +695,19 @@ mod tests {
             let node = Node::new("n".to_string(), 100.0, 100.0, "".to_string());
             let handle_size = 8.0;
             // Exactly at corner
-            assert_eq!(node.resize_handle_at(100.0, 100.0, handle_size), Some(ResizeHandle::TopLeft));
+            assert_eq!(
+                node.resize_handle_at(100.0, 100.0, handle_size),
+                Some(ResizeHandle::TopLeft)
+            );
             // Within handle range
-            assert_eq!(node.resize_handle_at(98.0, 98.0, handle_size), Some(ResizeHandle::TopLeft));
-            assert_eq!(node.resize_handle_at(103.0, 103.0, handle_size), Some(ResizeHandle::TopLeft));
+            assert_eq!(
+                node.resize_handle_at(98.0, 98.0, handle_size),
+                Some(ResizeHandle::TopLeft)
+            );
+            assert_eq!(
+                node.resize_handle_at(103.0, 103.0, handle_size),
+                Some(ResizeHandle::TopLeft)
+            );
             // Outside handle range
             assert_eq!(node.resize_handle_at(110.0, 100.0, handle_size), None);
         }
@@ -673,9 +717,15 @@ mod tests {
             let node = Node::new("n".to_string(), 100.0, 100.0, "".to_string());
             let handle_size = 8.0;
             // Exactly at corner (100 + 200 = 300)
-            assert_eq!(node.resize_handle_at(300.0, 100.0, handle_size), Some(ResizeHandle::TopRight));
+            assert_eq!(
+                node.resize_handle_at(300.0, 100.0, handle_size),
+                Some(ResizeHandle::TopRight)
+            );
             // Within handle range
-            assert_eq!(node.resize_handle_at(298.0, 98.0, handle_size), Some(ResizeHandle::TopRight));
+            assert_eq!(
+                node.resize_handle_at(298.0, 98.0, handle_size),
+                Some(ResizeHandle::TopRight)
+            );
         }
 
         #[test]
@@ -683,9 +733,15 @@ mod tests {
             let node = Node::new("n".to_string(), 100.0, 100.0, "".to_string());
             let handle_size = 8.0;
             // Exactly at corner (100 + 100 = 200)
-            assert_eq!(node.resize_handle_at(100.0, 200.0, handle_size), Some(ResizeHandle::BottomLeft));
+            assert_eq!(
+                node.resize_handle_at(100.0, 200.0, handle_size),
+                Some(ResizeHandle::BottomLeft)
+            );
             // Within handle range
-            assert_eq!(node.resize_handle_at(102.0, 202.0, handle_size), Some(ResizeHandle::BottomLeft));
+            assert_eq!(
+                node.resize_handle_at(102.0, 202.0, handle_size),
+                Some(ResizeHandle::BottomLeft)
+            );
         }
 
         #[test]
@@ -693,9 +749,15 @@ mod tests {
             let node = Node::new("n".to_string(), 100.0, 100.0, "".to_string());
             let handle_size = 8.0;
             // Exactly at corner
-            assert_eq!(node.resize_handle_at(300.0, 200.0, handle_size), Some(ResizeHandle::BottomRight));
+            assert_eq!(
+                node.resize_handle_at(300.0, 200.0, handle_size),
+                Some(ResizeHandle::BottomRight)
+            );
             // Within handle range
-            assert_eq!(node.resize_handle_at(301.0, 201.0, handle_size), Some(ResizeHandle::BottomRight));
+            assert_eq!(
+                node.resize_handle_at(301.0, 201.0, handle_size),
+                Some(ResizeHandle::BottomRight)
+            );
         }
 
         #[test]
@@ -717,7 +779,8 @@ mod tests {
 
         #[test]
         fn auto_size_long_text() {
-            let text = "This is a long piece of text that should make the node wider than the minimum";
+            let text =
+                "This is a long piece of text that should make the node wider than the minimum";
             let (w, h) = Node::auto_size(text);
             assert!(w >= 150.0 && w <= 400.0);
             assert!(h >= 60.0);
@@ -891,7 +954,10 @@ mod tests {
 
             let (_w, expected_h) = Node::auto_size("Half");
             assert_eq!(board.nodes[0].width, 275.0, "explicit width must be kept");
-            assert_eq!(board.nodes[0].height, expected_h, "missing height auto-sized");
+            assert_eq!(
+                board.nodes[0].height, expected_h,
+                "missing height auto-sized"
+            );
         }
 
         #[test]
@@ -917,7 +983,10 @@ mod tests {
         fn serde_round_trip_with_metadata() {
             let node = Node {
                 id: "m1".to_string(),
-                x: 0.0, y: 0.0, width: 200.0, height: 100.0,
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 100.0,
                 text: "Meta node".to_string(),
                 node_type: NodeType::Idea,
                 color: Some("#ff6600".to_string()),
@@ -1322,7 +1391,11 @@ mod tests {
 
         #[test]
         fn camera_with_very_small_zoom() {
-            let cam = Camera { x: 0.0, y: 0.0, zoom: 0.1 };
+            let cam = Camera {
+                x: 0.0,
+                y: 0.0,
+                zoom: 0.1,
+            };
             let (wx, wy) = cam.screen_to_world(100.0, 100.0);
             assert_eq!(wx, 1000.0);
             assert_eq!(wy, 1000.0);
@@ -1334,7 +1407,11 @@ mod tests {
 
         #[test]
         fn camera_with_large_zoom() {
-            let cam = Camera { x: 0.0, y: 0.0, zoom: 5.0 };
+            let cam = Camera {
+                x: 0.0,
+                y: 0.0,
+                zoom: 5.0,
+            };
             let (wx, wy) = cam.screen_to_world(500.0, 500.0);
             assert_eq!(wx, 100.0);
             assert_eq!(wy, 100.0);
@@ -1342,7 +1419,11 @@ mod tests {
 
         #[test]
         fn camera_with_negative_position() {
-            let cam = Camera { x: -100.0, y: -200.0, zoom: 1.0 };
+            let cam = Camera {
+                x: -100.0,
+                y: -200.0,
+                zoom: 1.0,
+            };
             let (wx, wy) = cam.screen_to_world(0.0, 0.0);
             assert_eq!(wx, -100.0);
             assert_eq!(wy, -200.0);
@@ -1521,7 +1602,14 @@ mod tests {
         #[test]
         fn board_with_many_edges() {
             let nodes: Vec<Node> = (0..100)
-                .map(|i| Node::new(format!("n{}", i), i as f64 * 250.0, 0.0, format!("Node {}", i)))
+                .map(|i| {
+                    Node::new(
+                        format!("n{}", i),
+                        i as f64 * 250.0,
+                        0.0,
+                        format!("Node {}", i),
+                    )
+                })
                 .collect();
 
             let edges: Vec<Edge> = (0..99)
@@ -1533,7 +1621,11 @@ mod tests {
                 })
                 .collect();
 
-            let board = Board { version: None, nodes, edges };
+            let board = Board {
+                version: None,
+                nodes,
+                edges,
+            };
 
             assert_eq!(board.edges.len(), 99);
 
@@ -1546,7 +1638,14 @@ mod tests {
         fn board_with_fully_connected_nodes() {
             let n = 20;
             let nodes: Vec<Node> = (0..n)
-                .map(|i| Node::new(format!("n{}", i), i as f64 * 250.0, 0.0, format!("Node {}", i)))
+                .map(|i| {
+                    Node::new(
+                        format!("n{}", i),
+                        i as f64 * 250.0,
+                        0.0,
+                        format!("Node {}", i),
+                    )
+                })
                 .collect();
 
             let mut edges = Vec::new();
@@ -1563,7 +1662,11 @@ mod tests {
                 }
             }
 
-            let board = Board { version: None, nodes, edges };
+            let board = Board {
+                version: None,
+                nodes,
+                edges,
+            };
 
             let expected_edges = n * (n - 1) / 2;
             assert_eq!(board.edges.len(), expected_edges);
@@ -1591,7 +1694,11 @@ mod tests {
                 priority: None,
             };
 
-            let board = Board { version: None, nodes: vec![node], edges: vec![] };
+            let board = Board {
+                version: None,
+                nodes: vec![node],
+                edges: vec![],
+            };
             let json = serde_json::to_string(&board).unwrap();
             let deserialized: Board = serde_json::from_str(&json).unwrap();
 

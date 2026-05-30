@@ -271,7 +271,7 @@ mod tests {
 
         history.undo(4); // future=[4], past=[2]
         history.undo(3); // future=[4,3], past=[]
-        // Both undos succeeded since past had 2 entries.
+                         // Both undos succeeded since past had 2 entries.
 
         // future holds 2 items (== max_size); both redos work.
         assert!(history.can_redo());
@@ -291,7 +291,7 @@ mod tests {
         history.undo(4); // future=[4],   past=[1,2]
         history.undo(3); // future=[4,3], past=[1]
         history.undo(2); // future=[4,3,2], past=[]
-        // future holds 3 items (== max_size); all redos work, oldest preserved.
+                         // future holds 3 items (== max_size); all redos work, oldest preserved.
         assert!(history.can_redo());
         assert_eq!(history.redo(1), Some(2));
         assert_eq!(history.redo(2), Some(3));
@@ -385,7 +385,7 @@ mod tests {
         let mut history: History<i32> = History::new(100);
         history.push_kind(0, Some("cycle")); // past=[0]
         let _ = history.undo(1); // navigation resets last_kind; past=[], future=[1]
-        // A same-kind push after navigation must NOT coalesce into the (now empty) past.
+                                 // A same-kind push after navigation must NOT coalesce into the (now empty) past.
         history.push_kind(2, Some("cycle")); // past=[2], future cleared
         history.push_kind(3, Some("cycle")); // coalesced into the same run
 
@@ -398,7 +398,7 @@ mod tests {
         let mut history: History<i32> = History::new(100);
         history.push(1); // past=[1]
         history.undo(2); // past=[], future=[2]
-        // First push of a kind establishes the run AND clears redo.
+                         // First push of a kind establishes the run AND clears redo.
         history.push_kind(3, Some("cycle"));
         assert!(!history.can_redo());
         // Subsequent coalesced push must also keep redo clear.

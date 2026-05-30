@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use infinite_brainstorm_lib::{default_board_path, load_board_at, query_board, validate_board_text};
+use infinite_brainstorm_lib::{
+    default_board_path, load_board_at, query_board, validate_board_text,
+};
 
 /// Infinite Brainstorm — agent-native infinite canvas.
 ///
@@ -96,11 +98,7 @@ fn run_validate(path: Option<PathBuf>) -> ExitCode {
         for err in &fatal {
             eprintln!("error: {err}");
         }
-        eprintln!(
-            "{}: {} validation error(s)",
-            path.display(),
-            fatal.len()
-        );
+        eprintln!("{}: {} validation error(s)", path.display(), fatal.len());
         ExitCode::FAILURE
     }
 }

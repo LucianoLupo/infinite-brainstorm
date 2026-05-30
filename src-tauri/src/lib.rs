@@ -6,8 +6,8 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::mpsc::channel;
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -278,8 +278,8 @@ type:<node_type> | tag:<tag> | status:<status> | group:<group> | priority:<n>"
 /// the frontend; setup-time callers log and degrade.
 fn get_board_path() -> Result<PathBuf, String> {
     // Use parent of src-tauri (project root) during dev, or current dir in production
-    let cwd = std::env::current_dir()
-        .map_err(|e| format!("Cannot determine current directory: {e}"))?;
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("Cannot determine current directory: {e}"))?;
 
     // If we're in src-tauri, go up one level to project root
     let path = if cwd.ends_with("src-tauri") {
@@ -349,7 +349,10 @@ pub fn write_board_atomic(path: &std::path::Path, board: &Board) -> Result<(), S
 
     // Write the serialized JSON to a sibling temp file in the same directory.
     let tmp_path = {
-        let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        let mut name = path
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
         name.push(".tmp");
         path.with_file_name(name)
     };
@@ -382,14 +385,18 @@ pub fn write_board_atomic(path: &std::path::Path, board: &Board) -> Result<(), S
     // value so we can restore it if the rename fails.
     let new_hash = content_hash(&json);
     let prior_hash = {
-        let mut guard = LAST_SELF_WRITE_HASH.lock().unwrap_or_else(|p| p.into_inner());
+        let mut guard = LAST_SELF_WRITE_HASH
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         guard.replace(new_hash)
     };
 
     fs::rename(&tmp_path, path).map_err(|e| {
         // The rename failed, so we never actually committed — restore the prior
         // self-write hash and clean up the temp file so we don't leave litter.
-        *LAST_SELF_WRITE_HASH.lock().unwrap_or_else(|p| p.into_inner()) = prior_hash;
+        *LAST_SELF_WRITE_HASH
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = prior_hash;
         let _ = fs::remove_file(&tmp_path);
         e.to_string()
     })?;
@@ -646,7 +653,10 @@ const MAX_IMAGE_BYTES: u64 = 25 * 1024 * 1024; // 25 MB
 fn expand_path(path: &str) -> PathBuf {
     let expanded = if let Some(rest) = path.strip_prefix('~') {
         match dirs::home_dir() {
-            Some(home) => home.join(rest.trim_start_matches('/')).to_string_lossy().into_owned(),
+            Some(home) => home
+                .join(rest.trim_start_matches('/'))
+                .to_string_lossy()
+                .into_owned(),
             None => path.to_string(),
         }
     } else if let Some(stripped) = path.strip_prefix("file://") {
@@ -725,7 +735,8 @@ fn sniff_image_mime(data: &[u8]) -> Option<&'static str> {
 fn ensure_assets_dir() -> Result<PathBuf, String> {
     let assets_dir = get_assets_dir()?;
     if !assets_dir.exists() {
-        fs::create_dir_all(&assets_dir).map_err(|e| format!("Failed to create assets dir: {}", e))?;
+        fs::create_dir_all(&assets_dir)
+            .map_err(|e| format!("Failed to create assets dir: {}", e))?;
     }
     Ok(assets_dir)
 }
@@ -745,8 +756,7 @@ fn read_image_base64_scoped(path: &str, allowed_roots: &[PathBuf]) -> Result<Str
     let canonical = scope_path(path, allowed_roots)?;
 
     // Cap file size BEFORE reading the bytes into memory.
-    let meta = fs::metadata(&canonical)
-        .map_err(|e| format!("Failed to stat file: {}", e))?;
+    let meta = fs::metadata(&canonical).map_err(|e| format!("Failed to stat file: {}", e))?;
     if meta.len() > MAX_IMAGE_BYTES {
         return Err(format!(
             "Image too large: {} bytes (max {} bytes)",
@@ -755,15 +765,14 @@ fn read_image_base64_scoped(path: &str, allowed_roots: &[PathBuf]) -> Result<Str
         ));
     }
 
-    let data = fs::read(&canonical)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let data = fs::read(&canonical).map_err(|e| format!("Failed to read file: {}", e))?;
 
     // Derive MIME from detected magic bytes, not the file extension. Reject any
     // file whose content is not a supported image format.
     let mime = sniff_image_mime(&data)
         .ok_or_else(|| "Unsupported or non-image file content".to_string())?;
 
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     let b64 = STANDARD.encode(&data);
 
     Ok(format!("data:{};base64,{}", mime, b64))
@@ -817,17 +826,18 @@ fn delete_asset(path: String) -> Result<(), String> {
     let assets_dir = get_assets_dir()?;
 
     // Canonicalize paths to prevent path traversal attacks
-    let canonical_file = file_path.canonicalize()
+    let canonical_file = file_path
+        .canonicalize()
         .map_err(|_| "File not found".to_string())?;
-    let canonical_assets = assets_dir.canonicalize()
+    let canonical_assets = assets_dir
+        .canonicalize()
         .map_err(|_| "Assets folder not found".to_string())?;
 
     if !canonical_file.starts_with(&canonical_assets) {
         return Err("Can only delete files from assets folder".to_string());
     }
 
-    fs::remove_file(&canonical_file)
-        .map_err(|e| format!("Failed to delete file: {}", e))?;
+    fs::remove_file(&canonical_file).map_err(|e| format!("Failed to delete file: {}", e))?;
 
     Ok(())
 }
@@ -843,8 +853,9 @@ fn paste_image(app: AppHandle) -> Result<PasteImageResult, String> {
         let rgba_data = tauri_image.rgba();
 
         // Convert RGBA to PNG using image crate
-        let img_buffer: image::RgbaImage = image::ImageBuffer::from_raw(width, height, rgba_data.to_vec())
-            .ok_or_else(|| "Failed to create image buffer".to_string())?;
+        let img_buffer: image::RgbaImage =
+            image::ImageBuffer::from_raw(width, height, rgba_data.to_vec())
+                .ok_or_else(|| "Failed to create image buffer".to_string())?;
 
         // Generate unique filename
         let filename = format!("{}.png", uuid::Uuid::new_v4());
@@ -852,7 +863,8 @@ fn paste_image(app: AppHandle) -> Result<PasteImageResult, String> {
         let dest_path = assets_dir.join(&filename);
 
         // Save as PNG
-        img_buffer.save_with_format(&dest_path, image::ImageFormat::Png)
+        img_buffer
+            .save_with_format(&dest_path, image::ImageFormat::Png)
             .map_err(|e| format!("Failed to save image: {}", e))?;
 
         return Ok(PasteImageResult {
@@ -869,15 +881,15 @@ fn paste_image(app: AppHandle) -> Result<PasteImageResult, String> {
         // Check if it's a file path to an image
         let path = PathBuf::from(text);
         if path.exists() && path.is_file() {
-            let ext = path.extension()
+            let ext = path
+                .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_lowercase();
 
             if ["png", "jpg", "jpeg", "gif", "webp", "bmp"].contains(&ext.as_str()) {
                 // Read and decode to get dimensions
-                let data = fs::read(&path)
-                    .map_err(|e| format!("Failed to read file: {}", e))?;
+                let data = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
                 let img = image::load_from_memory(&data)
                     .map_err(|e| format!("Failed to decode image: {}", e))?;
 
@@ -958,7 +970,13 @@ pub fn is_self_write(disk_hash: u64, last_self: Option<u64>) -> bool {
 /// can log it, warn the UI, and retry instead of taking down the watcher thread.
 fn build_watcher(
     board_path: &std::path::Path,
-) -> Result<(RecommendedWatcher, std::sync::mpsc::Receiver<notify::Result<notify::Event>>), String> {
+) -> Result<
+    (
+        RecommendedWatcher,
+        std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
+    ),
+    String,
+> {
     let (tx, rx) = channel();
 
     let mut watcher: RecommendedWatcher = Watcher::new(
@@ -1026,9 +1044,10 @@ fn setup_file_watcher(app: AppHandle) {
                 match rx.recv() {
                     Ok(event) => {
                         if let Ok(event) = event {
-                            let is_board_file = event.paths.iter().any(|p| {
-                                p.file_name().map(|n| n == "board.json").unwrap_or(false)
-                            });
+                            let is_board_file = event
+                                .paths
+                                .iter()
+                                .any(|p| p.file_name().map(|n| n == "board.json").unwrap_or(false));
 
                             if is_board_file {
                                 match event.kind {
@@ -1105,7 +1124,16 @@ pub fn run() {
             setup_file_watcher(app.handle().clone());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![load_board, save_board, get_board_path_cmd, fetch_link_preview, paste_image, read_image_base64, read_markdown_file, delete_asset])
+        .invoke_handler(tauri::generate_handler![
+            load_board,
+            save_board,
+            get_board_path_cmd,
+            fetch_link_preview,
+            paste_image,
+            read_image_base64,
+            read_markdown_file,
+            delete_asset
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -1324,10 +1352,7 @@ mod tests {
             std::fs::write(&path, content).unwrap();
 
             // URL encode the path with %20 for spaces
-            let encoded_path = format!(
-                "file://{}",
-                path.to_string_lossy().replace(' ', "%20")
-            );
+            let encoded_path = format!("file://{}", path.to_string_lossy().replace(' ', "%20"));
             let result = read_markdown_file_scoped(&encoded_path, &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
@@ -1476,7 +1501,10 @@ mod tests {
             let secret = dir.path().join("brainstorm_outside_secret.md");
             std::fs::write(&secret, "# leak").unwrap();
 
-            let traversal = format!("{}/../brainstorm_outside_secret.md", board.to_string_lossy());
+            let traversal = format!(
+                "{}/../brainstorm_outside_secret.md",
+                board.to_string_lossy()
+            );
             let result = read_markdown_file_scoped(&traversal, &[board.clone()]);
             assert!(result.is_err(), "traversal escape must be rejected");
         }
@@ -1530,11 +1558,20 @@ mod tests {
 
         #[test]
         fn sniff_detects_supported_formats() {
-            assert_eq!(sniff_image_mime(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Some("image/png"));
-            assert_eq!(sniff_image_mime(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
+            assert_eq!(
+                sniff_image_mime(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+                Some("image/png")
+            );
+            assert_eq!(
+                sniff_image_mime(&[0xFF, 0xD8, 0xFF, 0xE0]),
+                Some("image/jpeg")
+            );
             assert_eq!(sniff_image_mime(b"GIF89a..."), Some("image/gif"));
             assert_eq!(sniff_image_mime(b"GIF87a..."), Some("image/gif"));
-            assert_eq!(sniff_image_mime(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+            assert_eq!(
+                sniff_image_mime(b"RIFF\0\0\0\0WEBPVP8 "),
+                Some("image/webp")
+            );
             assert_eq!(sniff_image_mime(b"BM\0\0"), Some("image/bmp"));
             assert_eq!(sniff_image_mime(b"not an image"), None);
             assert_eq!(sniff_image_mime(&[]), None);

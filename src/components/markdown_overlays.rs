@@ -1,9 +1,9 @@
+use crate::app::{is_local_md_file, parse_markdown, BoardDataCtx, EditingCtx};
+use crate::canvas::LoadState;
+use crate::state::NodeType;
 use leptos::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use crate::app::{BoardDataCtx, EditingCtx, is_local_md_file, parse_markdown};
-use crate::canvas::LoadState;
-use crate::state::NodeType;
 
 thread_local! {
     /// Memoized markdown render keyed by `node_id -> (source_content, parsed_html)`.

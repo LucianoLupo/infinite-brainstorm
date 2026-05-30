@@ -1,8 +1,16 @@
-use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache, LoadState, RenderState, IMAGE_CACHE_CAP};
-use crate::components::{ErrorBanner, ImageModal, MarkdownModal, MarkdownOverlays, Minimap, NodeEditor, SearchOverlay};
+use crate::canvas::{
+    get_canvas_context, render_board, ImageCache, LinkPreviewCache, LoadState, RenderState,
+    IMAGE_CACHE_CAP,
+};
+use crate::components::{
+    ErrorBanner, ImageModal, MarkdownModal, MarkdownOverlays, Minimap, NodeEditor, SearchOverlay,
+};
 use crate::history::{EditKind, History};
 use crate::interaction::{reduce, BoardAction, SideEffect};
-use crate::state::{Board, Camera, Edge, LinkPreview, Node, NodeType, ResizeHandle, RESIZE_HANDLE_SIZE, MIN_NODE_WIDTH, MIN_NODE_HEIGHT};
+use crate::state::{
+    Board, Camera, Edge, LinkPreview, Node, NodeType, ResizeHandle, MIN_NODE_HEIGHT,
+    MIN_NODE_WIDTH, RESIZE_HANDLE_SIZE,
+};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use pulldown_cmark::{html, Event, Parser};
@@ -94,10 +102,7 @@ async fn load_board_storage() -> LoadOutcome {
 ///
 /// Shared by both the initial-load effect and the file-watcher reload path
 /// (immediate and deferred) so the three sites stay in lockstep.
-async fn reload_board_into(
-    set_board: WriteSignal<Board>,
-    load_error: RwSignal<Option<String>>,
-) {
+async fn reload_board_into(set_board: WriteSignal<Board>, load_error: RwSignal<Option<String>>) {
     match load_board_storage().await {
         LoadOutcome::Loaded(mut loaded_board) => {
             loaded_board.apply_auto_size();
@@ -111,7 +116,11 @@ async fn reload_board_into(
             let dropped = loaded_board.drop_dangling_edges();
             for edge_id in &dropped {
                 web_sys::console::warn_1(
-                    &format!("Dropped dangling edge {} (references a missing node)", edge_id).into(),
+                    &format!(
+                        "Dropped dangling edge {} (references a missing node)",
+                        edge_id
+                    )
+                    .into(),
                 );
             }
             load_error.set(None);
@@ -132,12 +141,13 @@ async fn reload_board_into(
 
 pub(crate) async fn save_board_storage(board: &Board) {
     if is_tauri() {
-        let args = serde_wasm_bindgen::to_value(&SaveBoardArgs { board: board.clone() }).unwrap();
+        let args = serde_wasm_bindgen::to_value(&SaveBoardArgs {
+            board: board.clone(),
+        })
+        .unwrap();
         let _ = invoke("save_board", args).await;
     } else if let Ok(json) = serde_json::to_string(board) {
-        if let Some(storage) = web_sys::window()
-            .and_then(|w| w.local_storage().ok().flatten())
-        {
+        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
             let _ = storage.set_item(LOCALSTORAGE_KEY, &json);
         }
     }
@@ -219,14 +229,10 @@ impl RequestSave {
 /// it reads `board` untracked, persists it, and clears `local_edit_pending`.
 /// `local_edit_pending` is raised on every call so the file watcher (P1.4) can
 /// distinguish our own in-flight edits from genuine external changes.
-fn make_request_save(
-    board: ReadSignal<Board>,
-    local_edit_pending: RwSignal<bool>,
-) -> RequestSave {
+fn make_request_save(board: ReadSignal<Board>, local_edit_pending: RwSignal<bool>) -> RequestSave {
     // Holds the live timer so a subsequent call drops (cancels) it before arming
     // a new one — this is what coalesces a burst into one write.
-    let pending: Rc<RefCell<Option<gloo_timers::callback::Timeout>>> =
-        Rc::new(RefCell::new(None));
+    let pending: Rc<RefCell<Option<gloo_timers::callback::Timeout>>> = Rc::new(RefCell::new(None));
 
     let sink: Rc<dyn Fn()> = Rc::new(move || {
         local_edit_pending.set(true);
@@ -296,7 +302,10 @@ impl Dispatcher {
     /// so successive same-kind edits (e.g. repeated type-cycling) coalesce into a
     /// single undo step inside [`History`].
     pub fn snapshot_kind(&self, kind: EditKind) {
-        let snap = (self.board.get_untracked(), self.selected_nodes.get_untracked());
+        let snap = (
+            self.board.get_untracked(),
+            self.selected_nodes.get_untracked(),
+        );
         self.history.get_value().borrow_mut().push_kind(snap, kind);
     }
 
@@ -326,10 +335,9 @@ impl Dispatcher {
                         struct DeleteAssetArgs {
                             path: String,
                         }
-                        let args = serde_wasm_bindgen::to_value(&DeleteAssetArgs {
-                            path: path.clone(),
-                        })
-                        .unwrap();
+                        let args =
+                            serde_wasm_bindgen::to_value(&DeleteAssetArgs { path: path.clone() })
+                                .unwrap();
                         let _ = invoke("delete_asset", args).await;
                     }
                 }
@@ -379,7 +387,10 @@ impl Dispatcher {
     /// Undo the last mutation, restoring both the board and the selection that was
     /// live when the snapshot was taken (F115). Returns `true` if anything changed.
     pub fn undo(&self) -> bool {
-        let current = (self.board.get_untracked(), self.selected_nodes.get_untracked());
+        let current = (
+            self.board.get_untracked(),
+            self.selected_nodes.get_untracked(),
+        );
         if let Some((board, selection)) = self.history.get_value().borrow_mut().undo(current) {
             self.set_board.set(board);
             self.set_selected_nodes.set(selection);
@@ -394,7 +405,10 @@ impl Dispatcher {
     /// Redo the last undone mutation, restoring board + selection. Returns `true`
     /// if anything changed.
     pub fn redo(&self) -> bool {
-        let current = (self.board.get_untracked(), self.selected_nodes.get_untracked());
+        let current = (
+            self.board.get_untracked(),
+            self.selected_nodes.get_untracked(),
+        );
         if let Some((board, selection)) = self.history.get_value().borrow_mut().redo(current) {
             self.set_board.set(board);
             self.set_selected_nodes.set(selection);
@@ -596,14 +610,15 @@ fn http_host(url: &str) -> Option<String> {
         .or_else(|| url.strip_prefix("https://"))?;
     // Host ends at the first '/', '?', '#', or end of string. Strip userinfo
     // ("user:pass@host") and the port (":443") if present.
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("");
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     let host_port = authority.rsplit('@').next().unwrap_or(authority);
     let host = if host_port.starts_with('[') {
         // IPv6 literal: "[::1]:443" -> "[::1]"
-        host_port.split(']').next().map(|h| format!("{}]", h)).unwrap_or_else(|| host_port.to_string())
+        host_port
+            .split(']')
+            .next()
+            .map(|h| format!("{}]", h))
+            .unwrap_or_else(|| host_port.to_string())
     } else {
         host_port.split(':').next().unwrap_or(host_port).to_string()
     };
@@ -639,7 +654,9 @@ pub fn is_public_http_host(url: &str) -> bool {
     // an IP, not a hostname — don't auto-fetch (backend still validates).
     let labels: Vec<&str> = host.split('.').collect();
     let all_numeric = !labels.is_empty()
-        && labels.iter().all(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_digit()));
+        && labels
+            .iter()
+            .all(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_digit()));
     if all_numeric {
         return false;
     }
@@ -756,8 +773,16 @@ pub fn fit_camera(
 
     // Guard a degenerate viewport (e.g. canvas not yet laid out) so we never
     // divide by zero or produce a non-finite zoom.
-    let cw = if canvas_w.is_finite() && canvas_w > 0.0 { canvas_w } else { 1.0 };
-    let ch = if canvas_h.is_finite() && canvas_h > 0.0 { canvas_h } else { 1.0 };
+    let cw = if canvas_w.is_finite() && canvas_w > 0.0 {
+        canvas_w
+    } else {
+        1.0
+    };
+    let ch = if canvas_h.is_finite() && canvas_h > 0.0 {
+        canvas_h
+    } else {
+        1.0
+    };
 
     let zoom = (cw / padded_w).min(ch / padded_h).clamp(0.1, 5.0);
 
@@ -767,7 +792,11 @@ pub fn fit_camera(
     let cam_x = center_x - (cw / zoom) / 2.0;
     let cam_y = center_y - (ch / zoom) / 2.0;
 
-    Camera { x: cam_x, y: cam_y, zoom }
+    Camera {
+        x: cam_x,
+        y: cam_y,
+        zoom,
+    }
 }
 
 /// Documented canvas grid spacing in world units. Node positions snap to this on
@@ -830,7 +859,11 @@ pub struct CameraPersist {
 
 impl CameraPersist {
     pub fn from_camera(c: &Camera) -> Self {
-        Self { x: c.x, y: c.y, zoom: c.zoom }
+        Self {
+            x: c.x,
+            y: c.y,
+            zoom: c.zoom,
+        }
     }
 
     /// Rebuild a [`Camera`], sanitizing a corrupt/hand-edited persisted zoom: a
@@ -985,7 +1018,8 @@ pub fn App() -> impl IntoView {
     let link_preview_cache_for_fetch = link_preview_cache.clone();
     let link_preview_cache_for_evict = link_preview_cache.clone();
     // Markdown file cache stored as a signal (for local .md files in link nodes)
-    let (md_file_cache, set_md_file_cache) = signal::<HashMap<String, LoadState<String>>>(HashMap::new());
+    let (md_file_cache, set_md_file_cache) =
+        signal::<HashMap<String, LoadState<String>>>(HashMap::new());
     let (image_load_trigger, set_image_load_trigger) = signal(0u32);
     let (link_preview_trigger, set_link_preview_trigger) = signal(0u32);
     let load_error = RwSignal::<Option<String>>::new(None);
@@ -1169,7 +1203,9 @@ pub fn App() -> impl IntoView {
                     if needs_load {
                         // Mark as loading
                         web_sys::console::log_1(&format!("Loading image: {}", url).into());
-                        image_cache.borrow_mut().insert(url.clone(), LoadState::Loading);
+                        image_cache
+                            .borrow_mut()
+                            .insert(url.clone(), LoadState::Loading);
 
                         let cache_for_async = image_cache.clone();
                         let lru_for_async = image_lru.clone();
@@ -1178,24 +1214,36 @@ pub fn App() -> impl IntoView {
 
                         spawn_local(async move {
                             // Determine image source URL
-                            let image_src = if url_for_async.starts_with("http://") || url_for_async.starts_with("https://") {
+                            let image_src = if url_for_async.starts_with("http://")
+                                || url_for_async.starts_with("https://")
+                            {
                                 // HTTP URL - use directly
                                 url_for_async.clone()
                             } else if is_tauri() {
                                 // Local file - use Tauri command to convert to base64
                                 #[derive(Serialize)]
-                                struct ReadImageArgs { path: String }
-                                let args = serde_wasm_bindgen::to_value(&ReadImageArgs { path: url_for_async.clone() }).unwrap();
+                                struct ReadImageArgs {
+                                    path: String,
+                                }
+                                let args = serde_wasm_bindgen::to_value(&ReadImageArgs {
+                                    path: url_for_async.clone(),
+                                })
+                                .unwrap();
                                 match invoke("read_image_base64", args).await.as_string() {
                                     Some(data_url) => data_url,
                                     None => {
-                                        web_sys::console::error_1(&format!("Failed to read image: {}", url_for_async).into());
+                                        web_sys::console::error_1(
+                                            &format!("Failed to read image: {}", url_for_async)
+                                                .into(),
+                                        );
                                         return;
                                     }
                                 }
                             } else {
                                 // Browser mode - can't load local files
-                                web_sys::console::error_1(&"Local files not supported in browser mode".into());
+                                web_sys::console::error_1(
+                                    &"Local files not supported in browser mode".into(),
+                                );
                                 return;
                             };
 
@@ -1211,7 +1259,9 @@ pub fn App() -> impl IntoView {
                                 let lru = lru_for_onload.clone();
                                 let url = url_for_closure.clone();
                                 move || {
-                                    web_sys::console::log_1(&format!("Image loaded successfully: {}", url).into());
+                                    web_sys::console::log_1(
+                                        &format!("Image loaded successfully: {}", url).into(),
+                                    );
                                     // Live image URLs (on-board) are exempt from LRU eviction.
                                     let live_urls: HashSet<String> = board
                                         .get_untracked()
@@ -1220,10 +1270,17 @@ pub fn App() -> impl IntoView {
                                         .filter(|n| n.node_type == NodeType::Image)
                                         .map(|n| n.text.clone())
                                         .collect();
-                                    insert_loaded_image(&cache, &lru, url.clone(), img.clone(), &live_urls);
+                                    insert_loaded_image(
+                                        &cache,
+                                        &lru,
+                                        url.clone(),
+                                        img.clone(),
+                                        &live_urls,
+                                    );
                                     trigger.update(|n| *n = n.wrapping_add(1));
                                 }
-                            }) as Box<dyn Fn()>);
+                            })
+                                as Box<dyn Fn()>);
 
                             img.set_onload(Some(onload_ref.as_ref().unchecked_ref()));
                             onload_ref.forget();
@@ -1233,14 +1290,17 @@ pub fn App() -> impl IntoView {
                                 let url = url_for_async.clone();
                                 let trigger = set_image_load_trigger;
                                 move || {
-                                    web_sys::console::error_1(&format!("Image load FAILED: {}", url).into());
+                                    web_sys::console::error_1(
+                                        &format!("Image load FAILED: {}", url).into(),
+                                    );
                                     // Mark Failed (distinct from Loading) so the node shows
                                     // an error instead of a perpetual spinner, and the load
                                     // effect won't re-fetch until the entry is evicted.
                                     cache.borrow_mut().insert(url.clone(), LoadState::Failed);
                                     trigger.update(|n| *n = n.wrapping_add(1));
                                 }
-                            }) as Box<dyn Fn()>);
+                            })
+                                as Box<dyn Fn()>);
 
                             img.set_onerror(Some(onerror.as_ref().unchecked_ref()));
                             onerror.forget();
@@ -1282,7 +1342,9 @@ pub fn App() -> impl IntoView {
 
                     if needs_fetch {
                         // Mark as loading
-                        link_cache.borrow_mut().insert(url.clone(), LoadState::Loading);
+                        link_cache
+                            .borrow_mut()
+                            .insert(url.clone(), LoadState::Loading);
 
                         let cache_for_result = link_cache.clone();
                         let image_cache_for_result = image_cache.clone();
@@ -1291,10 +1353,15 @@ pub fn App() -> impl IntoView {
                         let img_trigger = set_image_load_trigger;
 
                         spawn_local(async move {
-                            let args = serde_wasm_bindgen::to_value(&FetchLinkPreviewArgs { url: url.clone() }).unwrap();
+                            let args = serde_wasm_bindgen::to_value(&FetchLinkPreviewArgs {
+                                url: url.clone(),
+                            })
+                            .unwrap();
                             let result = invoke("fetch_link_preview", args).await;
 
-                            if let Ok(preview) = serde_wasm_bindgen::from_value::<LinkPreview>(result) {
+                            if let Ok(preview) =
+                                serde_wasm_bindgen::from_value::<LinkPreview>(result)
+                            {
                                 // If preview has an image, start loading it
                                 if let Some(ref image_url) = preview.image {
                                     let img_url = image_url.clone();
@@ -1304,7 +1371,9 @@ pub fn App() -> impl IntoView {
                                     };
 
                                     if needs_img_load {
-                                        image_cache_for_result.borrow_mut().insert(img_url.clone(), LoadState::Loading);
+                                        image_cache_for_result
+                                            .borrow_mut()
+                                            .insert(img_url.clone(), LoadState::Loading);
 
                                         let img = HtmlImageElement::new().unwrap();
                                         let cache_for_onload = image_cache_for_result.clone();
@@ -1326,19 +1395,29 @@ pub fn App() -> impl IntoView {
                                                     .filter(|n| n.node_type == NodeType::Image)
                                                     .map(|n| n.text.clone())
                                                     .collect();
-                                                insert_loaded_image(&cache, &lru, url.clone(), img.clone(), &live_urls);
+                                                insert_loaded_image(
+                                                    &cache,
+                                                    &lru,
+                                                    url.clone(),
+                                                    img.clone(),
+                                                    &live_urls,
+                                                );
                                                 img_trigger.update(|n| *n = n.wrapping_add(1));
                                             }
-                                        }) as Box<dyn Fn()>);
+                                        })
+                                            as Box<dyn Fn()>);
 
                                         let onerror = Closure::wrap(Box::new({
                                             let cache = cache_for_onload.clone();
                                             let url = url_for_closure.clone();
                                             move || {
-                                                cache.borrow_mut().insert(url.clone(), LoadState::Failed);
+                                                cache
+                                                    .borrow_mut()
+                                                    .insert(url.clone(), LoadState::Failed);
                                                 img_trigger.update(|n| *n = n.wrapping_add(1));
                                             }
-                                        }) as Box<dyn Fn()>);
+                                        })
+                                            as Box<dyn Fn()>);
 
                                         img.set_onload(Some(onload.as_ref().unchecked_ref()));
                                         onload.forget();
@@ -1348,7 +1427,9 @@ pub fn App() -> impl IntoView {
                                     }
                                 }
 
-                                cache_for_result.borrow_mut().insert(url, LoadState::Loaded(preview));
+                                cache_for_result
+                                    .borrow_mut()
+                                    .insert(url, LoadState::Loaded(preview));
                                 trigger.update(|n| *n = n.wrapping_add(1));
                             } else {
                                 // Preview fetch failed (backend error / SSRF block / bad data):
@@ -1380,7 +1461,10 @@ pub fn App() -> impl IntoView {
                     });
 
                     spawn_local(async move {
-                        let args = serde_wasm_bindgen::to_value(&ReadMarkdownFileArgs { path: path.clone() }).unwrap();
+                        let args = serde_wasm_bindgen::to_value(&ReadMarkdownFileArgs {
+                            path: path.clone(),
+                        })
+                        .unwrap();
                         let result = invoke("read_markdown_file", args).await;
 
                         // A non-string result means the backend read failed; record
@@ -1469,8 +1553,7 @@ pub fn App() -> impl IntoView {
     // frame, so a burst of mutations within one frame collapses to one draw.
     let render_scheduled: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     // Holds the rAF callback so it isn't dropped while the browser owns it.
-    let render_closure: Rc<RefCell<Option<Closure<dyn FnMut()>>>> =
-        Rc::new(RefCell::new(None));
+    let render_closure: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
 
     {
         let render_scheduled = render_scheduled.clone();
@@ -1602,9 +1685,14 @@ pub fn App() -> impl IntoView {
 
         // First check if clicking on a resize handle of any selected node
         // (handles extend outside node bounds, so check before contains_point)
-        let resize_hit = current_board.nodes.iter()
+        let resize_hit = current_board
+            .nodes
+            .iter()
             .filter(|n| current_selected.contains(&n.id))
-            .find_map(|n| n.resize_handle_at(world_x, world_y, handle_size).map(|h| (n, h)));
+            .find_map(|n| {
+                n.resize_handle_at(world_x, world_y, handle_size)
+                    .map(|h| (n, h))
+            });
 
         if let Some((node, handle)) = resize_hit {
             // History is NOT snapshotted here — it's deferred to the first actual
@@ -1657,7 +1745,9 @@ pub fn App() -> impl IntoView {
                     spawn_local(async move {
                         if let Some(window) = web_sys::window() {
                             let clipboard = window.navigator().clipboard();
-                            let _ = wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&url)).await;
+                            let _ =
+                                wasm_bindgen_futures::JsFuture::from(clipboard.write_text(&url))
+                                    .await;
                         }
                     });
                 }
@@ -1687,8 +1777,11 @@ pub fn App() -> impl IntoView {
                 });
             }
         } else {
-            let node_map: HashMap<&str, &Node> =
-                current_board.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+            let node_map: HashMap<&str, &Node> = current_board
+                .nodes
+                .iter()
+                .map(|n| (n.id.as_str(), n))
+                .collect();
             let clicked_edge = current_board.edges.iter().find(|edge| {
                 let from = node_map.get(edge.from_node.as_str());
                 let to = node_map.get(edge.to_node.as_str());
@@ -1697,7 +1790,15 @@ pub fn App() -> impl IntoView {
                     let from_cy = from.y + from.height / 2.0;
                     let to_cx = to.x + to.width / 2.0;
                     let to_cy = to.y + to.height / 2.0;
-                    point_near_line(world_x, world_y, from_cx, from_cy, to_cx, to_cy, 10.0 / cam.zoom)
+                    point_near_line(
+                        world_x,
+                        world_y,
+                        from_cx,
+                        from_cy,
+                        to_cx,
+                        to_cy,
+                        10.0 / cam.zoom,
+                    )
                 } else {
                     false
                 }
@@ -1761,8 +1862,10 @@ pub fn App() -> impl IntoView {
                     if let Some(node) = b.nodes.iter_mut().find(|n| &n.id == node_id) {
                         match current_resize.handle {
                             Some(ResizeHandle::TopLeft) => {
-                                let new_width = (current_resize.original_width - dx).max(MIN_NODE_WIDTH);
-                                let new_height = (current_resize.original_height - dy).max(MIN_NODE_HEIGHT);
+                                let new_width =
+                                    (current_resize.original_width - dx).max(MIN_NODE_WIDTH);
+                                let new_height =
+                                    (current_resize.original_height - dy).max(MIN_NODE_HEIGHT);
                                 let actual_dx = current_resize.original_width - new_width;
                                 let actual_dy = current_resize.original_height - new_height;
                                 node.x = current_resize.original_x + actual_dx;
@@ -1771,24 +1874,30 @@ pub fn App() -> impl IntoView {
                                 node.height = new_height;
                             }
                             Some(ResizeHandle::TopRight) => {
-                                let new_width = (current_resize.original_width + dx).max(MIN_NODE_WIDTH);
-                                let new_height = (current_resize.original_height - dy).max(MIN_NODE_HEIGHT);
+                                let new_width =
+                                    (current_resize.original_width + dx).max(MIN_NODE_WIDTH);
+                                let new_height =
+                                    (current_resize.original_height - dy).max(MIN_NODE_HEIGHT);
                                 let actual_dy = current_resize.original_height - new_height;
                                 node.y = current_resize.original_y + actual_dy;
                                 node.width = new_width;
                                 node.height = new_height;
                             }
                             Some(ResizeHandle::BottomLeft) => {
-                                let new_width = (current_resize.original_width - dx).max(MIN_NODE_WIDTH);
-                                let new_height = (current_resize.original_height + dy).max(MIN_NODE_HEIGHT);
+                                let new_width =
+                                    (current_resize.original_width - dx).max(MIN_NODE_WIDTH);
+                                let new_height =
+                                    (current_resize.original_height + dy).max(MIN_NODE_HEIGHT);
                                 let actual_dx = current_resize.original_width - new_width;
                                 node.x = current_resize.original_x + actual_dx;
                                 node.width = new_width;
                                 node.height = new_height;
                             }
                             Some(ResizeHandle::BottomRight) => {
-                                let new_width = (current_resize.original_width + dx).max(MIN_NODE_WIDTH);
-                                let new_height = (current_resize.original_height + dy).max(MIN_NODE_HEIGHT);
+                                let new_width =
+                                    (current_resize.original_width + dx).max(MIN_NODE_WIDTH);
+                                let new_height =
+                                    (current_resize.original_height + dy).max(MIN_NODE_HEIGHT);
                                 node.width = new_width;
                                 node.height = new_height;
                             }
@@ -1824,7 +1933,8 @@ pub fn App() -> impl IntoView {
             });
         } else if current_drag.is_box_selecting {
             let cam = camera.get_untracked();
-            let (start_wx, start_wy) = cam.screen_to_world(current_drag.start_x, current_drag.start_y);
+            let (start_wx, start_wy) =
+                cam.screen_to_world(current_drag.start_x, current_drag.start_y);
             let (end_wx, end_wy) = cam.screen_to_world(canvas_x, canvas_y);
             set_selection_box.set(Some((
                 start_wx.min(end_wx),
@@ -1951,8 +2061,7 @@ pub fn App() -> impl IntoView {
             // Snap-to-grid on release (F110): align each moved node's top-left to
             // the documented 50px grid so layouts stay tidy. The undo snapshot was
             // already taken at drag start, so the snapped position is what persists.
-            let moved_ids: HashSet<&String> =
-                current_drag.node_start_positions.keys().collect();
+            let moved_ids: HashSet<&String> = current_drag.node_start_positions.keys().collect();
             set_board.update(|b| {
                 for node in b.nodes.iter_mut() {
                     if moved_ids.contains(&node.id) {
@@ -2005,45 +2114,42 @@ pub fn App() -> impl IntoView {
             if prev.is_some() {
                 return;
             }
-            let Some(window) = web_sys::window() else { return };
-            let Some(document) = window.document() else { return };
-
-            let is_outside_canvas = move |ev: &web_sys::MouseEvent| {
-                match canvas_ref.get_untracked() {
-                    Some(canvas) => {
-                        let canvas_el: &web_sys::Element = canvas.as_ref();
-                        ev.target()
-                            .and_then(|t| t.dyn_into::<web_sys::Node>().ok())
-                            .map(|node| !canvas_el.contains(Some(&node)))
-                            .unwrap_or(true)
-                    }
-                    None => true,
-                }
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+            let Some(document) = window.document() else {
+                return;
             };
 
-            let move_cb = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(
-                move |ev: web_sys::MouseEvent| {
+            let is_outside_canvas = move |ev: &web_sys::MouseEvent| match canvas_ref.get_untracked()
+            {
+                Some(canvas) => {
+                    let canvas_el: &web_sys::Element = canvas.as_ref();
+                    ev.target()
+                        .and_then(|t| t.dyn_into::<web_sys::Node>().ok())
+                        .map(|node| !canvas_el.contains(Some(&node)))
+                        .unwrap_or(true)
+                }
+                None => true,
+            };
+
+            let move_cb =
+                Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
                     if gesture_active() && is_outside_canvas(&ev) {
                         on_mouse_move_doc(ev);
                     }
-                },
-            );
-            let up_cb = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(
-                move |ev: web_sys::MouseEvent| {
+                });
+            let up_cb =
+                Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |ev: web_sys::MouseEvent| {
                     if gesture_active() && is_outside_canvas(&ev) {
                         on_mouse_up_doc(ev);
                     }
-                },
-            );
+                });
 
-            let _ = document.add_event_listener_with_callback(
-                "mousemove",
-                move_cb.as_ref().unchecked_ref(),
-            );
-            let _ = document.add_event_listener_with_callback(
-                "mouseup",
-                up_cb.as_ref().unchecked_ref(),
-            );
+            let _ = document
+                .add_event_listener_with_callback("mousemove", move_cb.as_ref().unchecked_ref());
+            let _ = document
+                .add_event_listener_with_callback("mouseup", up_cb.as_ref().unchecked_ref());
             move_cb.forget();
             up_cb.forget();
         });
@@ -2058,8 +2164,12 @@ pub fn App() -> impl IntoView {
             if prev.is_some() {
                 return;
             }
-            let Some(window) = web_sys::window() else { return };
-            let Some(document) = window.document() else { return };
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+            let Some(document) = window.document() else {
+                return;
+            };
 
             let esc_cb = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(
                 move |ev: web_sys::KeyboardEvent| {
@@ -2073,10 +2183,8 @@ pub fn App() -> impl IntoView {
                 },
             );
 
-            let _ = document.add_event_listener_with_callback(
-                "keydown",
-                esc_cb.as_ref().unchecked_ref(),
-            );
+            let _ = document
+                .add_event_listener_with_callback("keydown", esc_cb.as_ref().unchecked_ref());
             esc_cb.forget();
         });
     }
@@ -2208,12 +2316,18 @@ pub fn App() -> impl IntoView {
             "c" if ev.meta_key() || ev.ctrl_key() => {
                 if !selected.is_empty() {
                     let current_board = board.get_untracked();
-                    let copied_nodes: Vec<Node> = current_board.nodes.iter()
+                    let copied_nodes: Vec<Node> = current_board
+                        .nodes
+                        .iter()
                         .filter(|n| selected.contains(&n.id))
                         .cloned()
                         .collect();
-                    let copied_edges: Vec<Edge> = current_board.edges.iter()
-                        .filter(|e| selected.contains(&e.from_node) && selected.contains(&e.to_node))
+                    let copied_edges: Vec<Edge> = current_board
+                        .edges
+                        .iter()
+                        .filter(|e| {
+                            selected.contains(&e.from_node) && selected.contains(&e.to_node)
+                        })
                         .cloned()
                         .collect();
                     set_node_clipboard.set(Some((copied_nodes, copied_edges)));
@@ -2225,34 +2339,40 @@ pub fn App() -> impl IntoView {
                         ev.prevent_default();
 
                         // Calculate center of copied nodes
-                        let cx = nodes.iter().map(|n| n.x + n.width / 2.0).sum::<f64>() / nodes.len() as f64;
-                        let cy = nodes.iter().map(|n| n.y + n.height / 2.0).sum::<f64>() / nodes.len() as f64;
+                        let cx = nodes.iter().map(|n| n.x + n.width / 2.0).sum::<f64>()
+                            / nodes.len() as f64;
+                        let cy = nodes.iter().map(|n| n.y + n.height / 2.0).sum::<f64>()
+                            / nodes.len() as f64;
                         let (mouse_x, mouse_y) = last_mouse_world_pos.get_untracked();
 
                         // Build old_id -> new_id mapping
-                        let id_map: HashMap<String, String> = nodes.iter()
+                        let id_map: HashMap<String, String> = nodes
+                            .iter()
                             .map(|n| (n.id.clone(), uuid::Uuid::new_v4().to_string()))
                             .collect();
 
-                        let new_nodes: Vec<Node> = nodes.iter().map(|n| {
-                            Node {
+                        let new_nodes: Vec<Node> = nodes
+                            .iter()
+                            .map(|n| Node {
                                 id: id_map[&n.id].clone(),
                                 x: n.x - cx + mouse_x,
                                 y: n.y - cy + mouse_y,
                                 ..n.clone()
-                            }
-                        }).collect();
+                            })
+                            .collect();
 
-                        let new_edges: Vec<Edge> = edges.iter().map(|e| {
-                            Edge {
+                        let new_edges: Vec<Edge> = edges
+                            .iter()
+                            .map(|e| Edge {
                                 id: uuid::Uuid::new_v4().to_string(),
                                 from_node: id_map[&e.from_node].clone(),
                                 to_node: id_map[&e.to_node].clone(),
                                 label: e.label.clone(),
-                            }
-                        }).collect();
+                            })
+                            .collect();
 
-                        let new_ids: HashSet<String> = new_nodes.iter().map(|n| n.id.clone()).collect();
+                        let new_ids: HashSet<String> =
+                            new_nodes.iter().map(|n| n.id.clone()).collect();
 
                         dispatch.apply(
                             BoardAction::PasteNodes {
@@ -2336,7 +2456,11 @@ pub fn App() -> impl IntoView {
 
     let on_paste = move |ev: web_sys::ClipboardEvent| {
         // If internal node clipboard was used, keydown already handled it
-        if node_clipboard.get_untracked().as_ref().is_some_and(|(n, _)| !n.is_empty()) {
+        if node_clipboard
+            .get_untracked()
+            .as_ref()
+            .is_some_and(|(n, _)| !n.is_empty())
+        {
             return;
         }
 
@@ -2356,7 +2480,13 @@ pub fn App() -> impl IntoView {
 
             match serde_wasm_bindgen::from_value::<PasteImageResult>(result.clone()) {
                 Ok(paste_result) => {
-                    web_sys::console::log_1(&format!("Paste success: path={}, {}x{}", paste_result.path, paste_result.width, paste_result.height).into());
+                    web_sys::console::log_1(
+                        &format!(
+                            "Paste success: path={}, {}x{}",
+                            paste_result.path, paste_result.width, paste_result.height
+                        )
+                        .into(),
+                    );
 
                     let node_width = (paste_result.width as f64).min(400.0).max(100.0);
                     let node_height = (paste_result.height as f64).min(400.0).max(100.0);
@@ -2440,10 +2570,7 @@ pub fn App() -> impl IntoView {
         let blob = web_sys::Blob::new_with_str_sequence_and_options(&array, &opts).unwrap();
 
         let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
-        let a: web_sys::HtmlAnchorElement = document
-            .create_element("a")
-            .unwrap()
-            .unchecked_into();
+        let a: web_sys::HtmlAnchorElement = document.create_element("a").unwrap().unchecked_into();
         a.set_href(&url);
         a.set_download("board.json");
         a.click();
@@ -2609,7 +2736,10 @@ mod tests {
         #[test]
         fn empty_string_yields_absent() {
             assert!(matches!(parse_localstorage_board(""), LoadOutcome::Absent));
-            assert!(matches!(parse_localstorage_board("   \n\t "), LoadOutcome::Absent));
+            assert!(matches!(
+                parse_localstorage_board("   \n\t "),
+                LoadOutcome::Absent
+            ));
         }
 
         #[test]
@@ -2622,7 +2752,10 @@ mod tests {
                     assert!(!msg.is_empty(), "parse error should carry a message");
                 }
                 LoadOutcome::Loaded(board) => {
-                    panic!("malformed input must not parse into a board ({} nodes)", board.nodes.len());
+                    panic!(
+                        "malformed input must not parse into a board ({} nodes)",
+                        board.nodes.len()
+                    );
                 }
                 LoadOutcome::Absent => panic!("malformed (non-empty) input must not be Absent"),
             }
@@ -2632,7 +2765,10 @@ mod tests {
         fn wrong_shape_json_yields_parse_error() {
             // Valid JSON, but not a Board shape.
             let wrong = r#"{"totally": "different", "schema": 42}"#;
-            assert!(matches!(parse_localstorage_board(wrong), LoadOutcome::ParseError(_)));
+            assert!(matches!(
+                parse_localstorage_board(wrong),
+                LoadOutcome::ParseError(_)
+            ));
         }
 
         #[test]
@@ -2651,7 +2787,11 @@ mod tests {
                 LoadOutcome::Absent => current = Board::default(),
                 LoadOutcome::ParseError(_) => { /* keep current untouched */ }
             }
-            assert_eq!(current.nodes.len(), 1, "ParseError must not blank the board");
+            assert_eq!(
+                current.nodes.len(),
+                1,
+                "ParseError must not blank the board"
+            );
             assert_eq!(current.nodes[0].text, "keep me");
         }
     }
@@ -2673,7 +2813,9 @@ mod tests {
 
         #[test]
         fn file_url_with_encoded_spaces() {
-            assert!(is_local_md_file("file:///Users/me/Obsidian%20Vault/note.md"));
+            assert!(is_local_md_file(
+                "file:///Users/me/Obsidian%20Vault/note.md"
+            ));
         }
 
         #[test]
@@ -2728,8 +2870,12 @@ mod tests {
         #[test]
         fn allows_public_domains() {
             assert!(is_public_http_host("https://example.com"));
-            assert!(is_public_http_host("http://github.com/anthropics/claude-code"));
-            assert!(is_public_http_host("https://sub.domain.example.org/path?q=1#frag"));
+            assert!(is_public_http_host(
+                "http://github.com/anthropics/claude-code"
+            ));
+            assert!(is_public_http_host(
+                "https://sub.domain.example.org/path?q=1#frag"
+            ));
             assert!(is_public_http_host("https://example.com:8443/x"));
             assert!(is_public_http_host("https://user:pass@example.com/x"));
         }
@@ -2756,7 +2902,9 @@ mod tests {
 
         #[test]
         fn rejects_ipv4_literals() {
-            assert!(!is_public_http_host("http://169.254.169.254/latest/meta-data/"));
+            assert!(!is_public_http_host(
+                "http://169.254.169.254/latest/meta-data/"
+            ));
             assert!(!is_public_http_host("http://127.0.0.1:8080"));
             assert!(!is_public_http_host("http://10.0.0.5"));
             assert!(!is_public_http_host("http://192.168.1.1/admin"));
@@ -2807,42 +2955,90 @@ mod tests {
         use crate::state::Node;
 
         fn node_at(x: f64, y: f64, w: f64, h: f64) -> Node {
-            Node { x, y, width: w, height: h, ..Node::new("t".into(), x, y, String::new()) }
+            Node {
+                x,
+                y,
+                width: w,
+                height: h,
+                ..Node::new("t".into(), x, y, String::new())
+            }
         }
 
         #[test]
         fn fully_inside() {
-            assert!(intersects_box(&node_at(10.0, 10.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+            assert!(intersects_box(
+                &node_at(10.0, 10.0, 20.0, 20.0),
+                0.0,
+                0.0,
+                100.0,
+                100.0
+            ));
         }
 
         #[test]
         fn fully_outside_right() {
-            assert!(!intersects_box(&node_at(200.0, 10.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+            assert!(!intersects_box(
+                &node_at(200.0, 10.0, 20.0, 20.0),
+                0.0,
+                0.0,
+                100.0,
+                100.0
+            ));
         }
 
         #[test]
         fn fully_outside_left() {
-            assert!(!intersects_box(&node_at(-50.0, 10.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+            assert!(!intersects_box(
+                &node_at(-50.0, 10.0, 20.0, 20.0),
+                0.0,
+                0.0,
+                100.0,
+                100.0
+            ));
         }
 
         #[test]
         fn fully_outside_above() {
-            assert!(!intersects_box(&node_at(10.0, -50.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+            assert!(!intersects_box(
+                &node_at(10.0, -50.0, 20.0, 20.0),
+                0.0,
+                0.0,
+                100.0,
+                100.0
+            ));
         }
 
         #[test]
         fn fully_outside_below() {
-            assert!(!intersects_box(&node_at(10.0, 200.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+            assert!(!intersects_box(
+                &node_at(10.0, 200.0, 20.0, 20.0),
+                0.0,
+                0.0,
+                100.0,
+                100.0
+            ));
         }
 
         #[test]
         fn partially_overlapping() {
-            assert!(intersects_box(&node_at(90.0, 90.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+            assert!(intersects_box(
+                &node_at(90.0, 90.0, 20.0, 20.0),
+                0.0,
+                0.0,
+                100.0,
+                100.0
+            ));
         }
 
         #[test]
         fn touching_edge() {
-            assert!(intersects_box(&node_at(100.0, 0.0, 20.0, 20.0), 0.0, 0.0, 100.0, 100.0));
+            assert!(intersects_box(
+                &node_at(100.0, 0.0, 20.0, 20.0),
+                0.0,
+                0.0,
+                100.0,
+                100.0
+            ));
         }
     }
 
@@ -2922,14 +3118,20 @@ mod tests {
             );
             // The whole payload is escaped — the literal angle brackets survive.
             assert!(html.contains("&lt;img"), "expected escaped markup: {html}");
-            assert!(html.contains("&gt;"), "expected escaped closing bracket: {html}");
+            assert!(
+                html.contains("&gt;"),
+                "expected escaped closing bracket: {html}"
+            );
         }
 
         #[test]
         fn strips_inline_html_script() {
             let html = parse_markdown("hello <script>alert(1)</script> world");
             assert!(!html.contains("<script>"), "raw <script> leaked: {html}");
-            assert!(html.contains("&lt;script&gt;"), "expected escaped script: {html}");
+            assert!(
+                html.contains("&lt;script&gt;"),
+                "expected escaped script: {html}"
+            );
         }
     }
 
@@ -3105,7 +3307,10 @@ mod tests {
             let (tlx, tly) = (bbox.0 * scale + off_x, bbox.1 * scale + off_y);
             let (brx, bry) = (bbox.2 * scale + off_x, bbox.3 * scale + off_y);
             assert!(tlx >= pad - 1e-6 && tly >= pad - 1e-6, "tl {tlx},{tly}");
-            assert!(brx <= mw - pad + 1e-6 && bry <= mh - pad + 1e-6, "br {brx},{bry}");
+            assert!(
+                brx <= mw - pad + 1e-6 && bry <= mh - pad + 1e-6,
+                "br {brx},{bry}"
+            );
         }
 
         #[test]
@@ -3145,7 +3350,11 @@ mod tests {
 
         #[test]
         fn round_trips_a_camera() {
-            let cam = Camera { x: 123.0, y: -456.0, zoom: 1.75 };
+            let cam = Camera {
+                x: 123.0,
+                y: -456.0,
+                zoom: 1.75,
+            };
             let restored = CameraPersist::from_camera(&cam).to_camera();
             assert_eq!(restored.x, 123.0);
             assert_eq!(restored.y, -456.0);
@@ -3154,7 +3363,11 @@ mod tests {
 
         #[test]
         fn json_round_trip() {
-            let p = CameraPersist { x: 1.0, y: 2.0, zoom: 3.0 };
+            let p = CameraPersist {
+                x: 1.0,
+                y: 2.0,
+                zoom: 3.0,
+            };
             let json = serde_json::to_string(&p).unwrap();
             let back: CameraPersist = serde_json::from_str(&json).unwrap();
             assert_eq!(p, back);
@@ -3163,7 +3376,12 @@ mod tests {
         #[test]
         fn sanitizes_out_of_range_zoom() {
             for bad in [0.0, -1.0, 99.0, f64::NAN, f64::INFINITY] {
-                let cam = CameraPersist { x: 5.0, y: 6.0, zoom: bad }.to_camera();
+                let cam = CameraPersist {
+                    x: 5.0,
+                    y: 6.0,
+                    zoom: bad,
+                }
+                .to_camera();
                 assert_eq!(cam.zoom, 1.0, "zoom {bad} not sanitized");
                 assert_eq!(cam.x, 5.0);
                 assert_eq!(cam.y, 6.0);
@@ -3172,7 +3390,12 @@ mod tests {
 
         #[test]
         fn sanitizes_non_finite_position() {
-            let cam = CameraPersist { x: f64::NAN, y: f64::INFINITY, zoom: 2.0 }.to_camera();
+            let cam = CameraPersist {
+                x: f64::NAN,
+                y: f64::INFINITY,
+                zoom: 2.0,
+            }
+            .to_camera();
             assert_eq!(cam.x, 0.0);
             assert_eq!(cam.y, 0.0);
             assert_eq!(cam.zoom, 2.0);

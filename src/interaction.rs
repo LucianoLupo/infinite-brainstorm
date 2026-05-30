@@ -191,7 +191,11 @@ mod tests {
     }
 
     fn board_with(nodes: Vec<Node>, edges: Vec<Edge>) -> Board {
-        Board { version: None, nodes, edges }
+        Board {
+            version: None,
+            nodes,
+            edges,
+        }
     }
 
     #[test]
@@ -280,7 +284,11 @@ mod tests {
     #[test]
     fn delete_selected_removes_nodes_and_incident_edges() {
         let board = board_with(
-            vec![node("a", 0.0, 0.0), node("b", 0.0, 0.0), node("c", 0.0, 0.0)],
+            vec![
+                node("a", 0.0, 0.0),
+                node("b", 0.0, 0.0),
+                node("c", 0.0, 0.0),
+            ],
             vec![
                 Edge {
                     id: "ab".into(),
@@ -385,9 +393,15 @@ mod tests {
         b.node_type = NodeType::Idea;
         let board = board_with(vec![a, b], vec![]);
         let (out, fx) = reduce(board, BoardAction::CycleType(vec!["a".into()]));
-        assert_eq!(out.nodes.iter().find(|n| n.id == "a").unwrap().node_type, NodeType::Idea);
+        assert_eq!(
+            out.nodes.iter().find(|n| n.id == "a").unwrap().node_type,
+            NodeType::Idea
+        );
         // b unselected, unchanged.
-        assert_eq!(out.nodes.iter().find(|n| n.id == "b").unwrap().node_type, NodeType::Idea);
+        assert_eq!(
+            out.nodes.iter().find(|n| n.id == "b").unwrap().node_type,
+            NodeType::Idea
+        );
         assert_eq!(fx, vec![SideEffect::RequestSave]);
     }
 

@@ -41,7 +41,10 @@ fn writes_final_file_and_round_trips() {
     // Final file exists and the temp file was renamed away (no leftover).
     assert!(path.exists(), "board.json should exist after save");
     let tmp = dir.path().join("board.json.tmp");
-    assert!(!tmp.exists(), "temp file should be renamed into place, not left behind");
+    assert!(
+        !tmp.exists(),
+        "temp file should be renamed into place, not left behind"
+    );
 
     // Contents round-trip back to an equivalent board.
     let content = std::fs::read_to_string(&path).unwrap();
@@ -69,13 +72,24 @@ fn second_save_backs_up_prior_contents() {
     second.nodes.push(sample_node("n3", "Third"));
     write_board_atomic(&path, &second).unwrap();
 
-    assert!(bak.exists(), "backup of prior contents should exist after a second save");
+    assert!(
+        bak.exists(),
+        "backup of prior contents should exist after a second save"
+    );
 
     // The .bak holds the FIRST board; the live file holds the SECOND board.
     let bak_board: Board = serde_json::from_str(&std::fs::read_to_string(&bak).unwrap()).unwrap();
     let live_board: Board = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(bak_board.nodes.len(), 2, "backup should hold the prior (2-node) board");
-    assert_eq!(live_board.nodes.len(), 3, "live file should hold the new (3-node) board");
+    assert_eq!(
+        bak_board.nodes.len(),
+        2,
+        "backup should hold the prior (2-node) board"
+    );
+    assert_eq!(
+        live_board.nodes.len(),
+        3,
+        "live file should hold the new (3-node) board"
+    );
 }
 
 #[test]

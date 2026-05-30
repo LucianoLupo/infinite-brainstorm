@@ -178,5 +178,8 @@ fn golden_fixture_round_trips_byte_identically() {
         "compact writer output must not contain newlines"
     );
     let reread: Board = serde_json::from_str(&written).unwrap();
-    assert_eq!(reread, board, "compact write must round-trip to an equal Board");
+    assert_eq!(
+        reread, board,
+        "compact write must round-trip to an equal Board"
+    );
 }

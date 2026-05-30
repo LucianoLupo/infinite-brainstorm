@@ -1,5 +1,5 @@
-use leptos::prelude::*;
 use crate::app::EditingCtx;
+use leptos::prelude::*;
 
 /// Non-blocking banner that surfaces a board.json parse error.
 ///

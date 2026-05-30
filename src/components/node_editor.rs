@@ -1,8 +1,8 @@
-use leptos::prelude::*;
-use wasm_bindgen::JsCast;
 use crate::app::{BoardDataCtx, EditingCtx};
 use crate::interaction::BoardAction;
 use crate::state::NodeType;
+use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 
 #[component]
 pub fn NodeEditor() -> impl IntoView {
@@ -25,7 +25,8 @@ pub fn NodeEditor() -> impl IntoView {
                     let node_id_for_blur = node_id.clone();
                     let on_blur_textarea = move |ev: web_sys::FocusEvent| {
                         if let Some(target) = ev.target() {
-                            if let Ok(textarea) = target.dyn_into::<web_sys::HtmlTextAreaElement>() {
+                            if let Ok(textarea) = target.dyn_into::<web_sys::HtmlTextAreaElement>()
+                            {
                                 let new_text = textarea.value();
                                 // Dispatch through the reducer so the commit snapshots
                                 // undo history (fixes undo dropping typed text, F52/F109).
@@ -45,7 +46,9 @@ pub fn NodeEditor() -> impl IntoView {
                     let on_keydown_textarea = move |ev: web_sys::KeyboardEvent| {
                         if ev.key().as_str() == "Escape" {
                             if let Some(target) = ev.target() {
-                                if let Ok(textarea) = target.dyn_into::<web_sys::HtmlTextAreaElement>() {
+                                if let Ok(textarea) =
+                                    target.dyn_into::<web_sys::HtmlTextAreaElement>()
+                                {
                                     let new_text = textarea.value();
                                     ctx.dispatch.apply(
                                         BoardAction::EditMarkdown {
@@ -96,28 +99,26 @@ pub fn NodeEditor() -> impl IntoView {
                     };
 
                     let node_id_for_keydown = node_id.clone();
-                    let on_keydown = move |ev: web_sys::KeyboardEvent| {
-                        match ev.key().as_str() {
-                            "Enter" => {
-                                if let Some(target) = ev.target() {
-                                    if let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() {
-                                        let new_text = input.value();
-                                        ctx.dispatch.apply(
-                                            BoardAction::EditText {
-                                                id: node_id_for_keydown.clone(),
-                                                text: new_text,
-                                            },
-                                            None,
-                                        );
-                                        ctx.set_editing_node.set(None);
-                                    }
+                    let on_keydown = move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
+                        "Enter" => {
+                            if let Some(target) = ev.target() {
+                                if let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() {
+                                    let new_text = input.value();
+                                    ctx.dispatch.apply(
+                                        BoardAction::EditText {
+                                            id: node_id_for_keydown.clone(),
+                                            text: new_text,
+                                        },
+                                        None,
+                                    );
+                                    ctx.set_editing_node.set(None);
                                 }
                             }
-                            "Escape" => {
-                                ctx.set_editing_node.set(None);
-                            }
-                            _ => {}
                         }
+                        "Escape" => {
+                            ctx.set_editing_node.set(None);
+                        }
+                        _ => {}
                     };
 
                     return Some(view! {

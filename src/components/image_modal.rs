@@ -1,5 +1,5 @@
-use leptos::prelude::*;
 use crate::app::EditingCtx;
+use leptos::prelude::*;
 
 #[component]
 pub fn ImageModal() -> impl IntoView {

@@ -17,7 +17,11 @@ fn center_camera_on(cam: &Camera, wx: f64, wy: f64) -> Option<Camera> {
         .ok()?;
     let rect = canvas.get_bounding_client_rect();
     let (cw, ch) = (rect.width(), rect.height());
-    let zoom = if cam.zoom.is_finite() && cam.zoom > 0.0 { cam.zoom } else { 1.0 };
+    let zoom = if cam.zoom.is_finite() && cam.zoom > 0.0 {
+        cam.zoom
+    } else {
+        1.0
+    };
     Some(Camera {
         x: wx - (cw / zoom) / 2.0,
         y: wy - (ch / zoom) / 2.0,
@@ -62,30 +66,28 @@ pub fn SearchOverlay() -> impl IntoView {
         }
     };
 
-    let on_keydown = move |ev: web_sys::KeyboardEvent| {
-        match ev.key().as_str() {
-            "Enter" => {
-                ev.prevent_default();
-                let query = sel_ctx.search_query.get_untracked().unwrap_or_default();
-                let ids = apply_matches(&query);
-                if let Some(first_id) = ids.first() {
-                    let board = board_ctx.board.get_untracked();
-                    if let Some(node) = board.nodes.iter().find(|n| &n.id == first_id) {
-                        let (wx, wy) = node.center();
-                        let cam = board_ctx.camera.get_untracked();
-                        if let Some(next) = center_camera_on(&cam, wx, wy) {
-                            board_ctx.set_camera.set(next);
-                        }
+    let on_keydown = move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
+        "Enter" => {
+            ev.prevent_default();
+            let query = sel_ctx.search_query.get_untracked().unwrap_or_default();
+            let ids = apply_matches(&query);
+            if let Some(first_id) = ids.first() {
+                let board = board_ctx.board.get_untracked();
+                if let Some(node) = board.nodes.iter().find(|n| &n.id == first_id) {
+                    let (wx, wy) = node.center();
+                    let cam = board_ctx.camera.get_untracked();
+                    if let Some(next) = center_camera_on(&cam, wx, wy) {
+                        board_ctx.set_camera.set(next);
                     }
                 }
             }
-            "Escape" => {
-                ev.prevent_default();
-                sel_ctx.set_selected_nodes.set(HashSet::new());
-                sel_ctx.set_search_query.set(None);
-            }
-            _ => {}
         }
+        "Escape" => {
+            ev.prevent_default();
+            sel_ctx.set_selected_nodes.set(HashSet::new());
+            sel_ctx.set_search_query.set(None);
+        }
+        _ => {}
     };
 
     move || {

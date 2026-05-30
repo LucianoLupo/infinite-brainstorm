@@ -112,8 +112,16 @@ pub fn Minimap() -> impl IntoView {
 
         let (vw, vh) = viewport_size.get_untracked();
         set_camera.update(|c: &mut Camera| {
-            let half_w = if c.zoom > 0.0 { (vw / c.zoom) / 2.0 } else { 0.0 };
-            let half_h = if c.zoom > 0.0 { (vh / c.zoom) / 2.0 } else { 0.0 };
+            let half_w = if c.zoom > 0.0 {
+                (vw / c.zoom) / 2.0
+            } else {
+                0.0
+            };
+            let half_h = if c.zoom > 0.0 {
+                (vh / c.zoom) / 2.0
+            } else {
+                0.0
+            };
             c.x = world_x - half_w;
             c.y = world_y - half_h;
         });

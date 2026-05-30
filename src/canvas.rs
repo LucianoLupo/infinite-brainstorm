@@ -168,8 +168,7 @@ fn edge_outside_viewport(
         (Some(from), Some(to)) => {
             let (fx, fy) =
                 camera.world_to_screen(from.x + from.width / 2.0, from.y + from.height / 2.0);
-            let (tx, ty) =
-                camera.world_to_screen(to.x + to.width / 2.0, to.y + to.height / 2.0);
+            let (tx, ty) = camera.world_to_screen(to.x + to.width / 2.0, to.y + to.height / 2.0);
             box_outside_viewport(fx, fy, tx, ty, view_w, view_h)
         }
         _ => true,
@@ -220,7 +219,11 @@ pub fn render_board(state: RenderState) {
     // context by `dpr`, so every draw call below works in CSS-pixel space.
     // Use CSS dimensions for the background/grid so we cover exactly the visible
     // area regardless of the device-pixel ratio.
-    let dpr = if dpr.is_finite() && dpr > 0.0 { dpr } else { 1.0 };
+    let dpr = if dpr.is_finite() && dpr > 0.0 {
+        dpr
+    } else {
+        1.0
+    };
     let width = canvas.width() as f64 / dpr;
     let height = canvas.height() as f64 / dpr;
 
@@ -249,7 +252,14 @@ pub fn render_board(state: RenderState) {
     }
 
     if let Some((Some(from_node_id), to_screen_x, to_screen_y)) = edge_preview {
-        draw_edge_preview(ctx, &node_map, from_node_id, to_screen_x, to_screen_y, camera);
+        draw_edge_preview(
+            ctx,
+            &node_map,
+            from_node_id,
+            to_screen_x,
+            to_screen_y,
+            camera,
+        );
     }
 
     for node in &board.nodes {
@@ -261,7 +271,15 @@ pub fn render_board(state: RenderState) {
         }
         let is_selected = selected_nodes.contains(&node.id);
         let is_editing = editing_node == Some(&node.id);
-        draw_node(ctx, node, camera, is_selected, is_editing, image_cache, link_preview_cache);
+        draw_node(
+            ctx,
+            node,
+            camera,
+            is_selected,
+            is_editing,
+            image_cache,
+            link_preview_cache,
+        );
     }
 
     if let Some((min_x, min_y, max_x, max_y)) = selection_box {
@@ -390,12 +408,31 @@ fn draw_node(
 
     match node.node_type {
         NodeType::Image => {
-            draw_image_content(ctx, node, camera, screen_x, screen_y, screen_width, screen_height, image_cache);
+            draw_image_content(
+                ctx,
+                node,
+                camera,
+                screen_x,
+                screen_y,
+                screen_width,
+                screen_height,
+                image_cache,
+            );
         }
         NodeType::Link => {
             // Local .md files are rendered via HTML overlay like md nodes
             if !is_local_md_file(&node.text) {
-                draw_link_content(ctx, node, camera, screen_x, screen_y, screen_width, screen_height, image_cache, link_preview_cache);
+                draw_link_content(
+                    ctx,
+                    node,
+                    camera,
+                    screen_x,
+                    screen_y,
+                    screen_width,
+                    screen_height,
+                    image_cache,
+                    link_preview_cache,
+                );
             }
             // Otherwise just show background + label (content handled by HTML overlay)
         }
@@ -420,8 +457,15 @@ fn draw_node(
                 let line_height = font_px as f64 * 1.4;
 
                 draw_wrapped_text(
-                    ctx, &node.id, &node.text, text_x, text_y, max_width, max_height,
-                    line_height, font_px,
+                    ctx,
+                    &node.id,
+                    &node.text,
+                    text_x,
+                    text_y,
+                    max_width,
+                    max_height,
+                    line_height,
+                    font_px,
                 );
             }
         }
@@ -445,7 +489,10 @@ fn draw_node(
 
     if let Some(priority) = node.priority {
         let p_text = format!("P{}", priority.clamp(1, 5));
-        let type_width = ctx.measure_text(type_indicator).map(|m| m.width()).unwrap_or(30.0);
+        let type_width = ctx
+            .measure_text(type_indicator)
+            .map(|m| m.width())
+            .unwrap_or(30.0);
         let _ = ctx.fill_text(&p_text, screen_x + pad + type_width + pad, screen_y + pad);
     }
 
@@ -469,7 +516,14 @@ fn draw_node(
     }
 
     if is_selected {
-        draw_resize_handles(ctx, screen_x, screen_y, screen_width, screen_height, camera.zoom);
+        draw_resize_handles(
+            ctx,
+            screen_x,
+            screen_y,
+            screen_width,
+            screen_height,
+            camera.zoom,
+        );
     }
 }
 
@@ -524,7 +578,11 @@ fn draw_image_content(
             ctx.set_font(&format!("{}px {}", small_font, FONT));
             ctx.set_text_align("right");
             ctx.set_text_baseline("top");
-            let _ = ctx.fill_text(&truncated, screen_x + screen_width - 4.0 * camera.zoom, screen_y + 4.0 * camera.zoom);
+            let _ = ctx.fill_text(
+                &truncated,
+                screen_x + screen_width - 4.0 * camera.zoom,
+                screen_y + 4.0 * camera.zoom,
+            );
         }
         Some(LoadState::Loading) => {
             // Image fetch in progress
@@ -533,7 +591,11 @@ fn draw_image_content(
             ctx.set_font(&format!("{}px {}", font_size, FONT));
             ctx.set_text_align("center");
             ctx.set_text_baseline("middle");
-            let _ = ctx.fill_text("Loading...", screen_x + screen_width / 2.0, screen_y + screen_height / 2.0);
+            let _ = ctx.fill_text(
+                "Loading...",
+                screen_x + screen_width / 2.0,
+                screen_y + screen_height / 2.0,
+            );
         }
         Some(LoadState::Failed) => {
             // Fetch failed — distinct from loading so the user sees the error.
@@ -542,7 +604,11 @@ fn draw_image_content(
             ctx.set_font(&format!("{}px {}", font_size, FONT));
             ctx.set_text_align("center");
             ctx.set_text_baseline("middle");
-            let _ = ctx.fill_text("[Image failed]", screen_x + screen_width / 2.0, screen_y + screen_height / 2.0);
+            let _ = ctx.fill_text(
+                "[Image failed]",
+                screen_x + screen_width / 2.0,
+                screen_y + screen_height / 2.0,
+            );
         }
         None => {
             // Image not in cache yet, show placeholder
@@ -551,7 +617,11 @@ fn draw_image_content(
             ctx.set_font(&format!("{}px {}", font_size, FONT));
             ctx.set_text_align("center");
             ctx.set_text_baseline("middle");
-            let _ = ctx.fill_text("[No Image]", screen_x + screen_width / 2.0, screen_y + screen_height / 2.0);
+            let _ = ctx.fill_text(
+                "[No Image]",
+                screen_x + screen_width / 2.0,
+                screen_y + screen_height / 2.0,
+            );
         }
     }
 }
@@ -613,9 +683,10 @@ fn draw_link_content(
             }
 
             // Draw domain at bottom
-            let domain = preview.site_name.clone().unwrap_or_else(|| {
-                url.split('/').nth(2).unwrap_or(url).to_string()
-            });
+            let domain = preview
+                .site_name
+                .clone()
+                .unwrap_or_else(|| url.split('/').nth(2).unwrap_or(url).to_string());
             ctx.set_fill_style_str(TEXT_DIM);
             ctx.set_font(&format!("{}px {}", domain_font_size, FONT));
             ctx.set_text_align("right");
@@ -628,7 +699,11 @@ fn draw_link_content(
             ctx.set_font(&format!("{}px {}", font_size, FONT));
             ctx.set_text_align("center");
             ctx.set_text_baseline("middle");
-            let _ = ctx.fill_text("Loading...", screen_x + screen_width / 2.0, screen_y + screen_height / 2.0);
+            let _ = ctx.fill_text(
+                "Loading...",
+                screen_x + screen_width / 2.0,
+                screen_y + screen_height / 2.0,
+            );
         }
         // Failed preview or not-yet-fetched: fall back to showing the raw URL so
         // the node is still useful (and a failed link doesn't show a stale spinner).
@@ -638,7 +713,12 @@ fn draw_link_content(
             ctx.set_font(&format!("{}px {}", font_size, FONT));
             ctx.set_text_align("center");
             ctx.set_text_baseline("middle");
-            let _ = ctx.fill_text_with_max_width(url, screen_x + screen_width / 2.0, screen_y + screen_height / 2.0, content_width);
+            let _ = ctx.fill_text_with_max_width(
+                url,
+                screen_x + screen_width / 2.0,
+                screen_y + screen_height / 2.0,
+                content_width,
+            );
         }
     }
 
@@ -648,9 +728,12 @@ fn draw_link_content(
 /// Find the point where a line from `from` toward the center of a rectangle
 /// intersects the rectangle boundary.
 fn clip_line_to_rect(
-    from_x: f64, from_y: f64,
-    rect_cx: f64, rect_cy: f64,
-    half_w: f64, half_h: f64,
+    from_x: f64,
+    from_y: f64,
+    rect_cx: f64,
+    rect_cy: f64,
+    half_w: f64,
+    half_h: f64,
 ) -> (f64, f64) {
     let dx = from_x - rect_cx;
     let dy = from_y - rect_cy;
@@ -659,8 +742,16 @@ fn clip_line_to_rect(
         return (rect_cx, rect_cy);
     }
 
-    let tx = if dx.abs() > 1e-10 { half_w / dx.abs() } else { f64::INFINITY };
-    let ty = if dy.abs() > 1e-10 { half_h / dy.abs() } else { f64::INFINITY };
+    let tx = if dx.abs() > 1e-10 {
+        half_w / dx.abs()
+    } else {
+        f64::INFINITY
+    };
+    let ty = if dy.abs() > 1e-10 {
+        half_h / dy.abs()
+    } else {
+        f64::INFINITY
+    };
     let t = tx.min(ty);
 
     (rect_cx + t * dx, rect_cy + t * dy)
@@ -683,7 +774,13 @@ fn draw_arrowhead(ctx: &CanvasRenderingContext2d, tip_x: f64, tip_y: f64, angle:
     ctx.fill();
 }
 
-fn draw_edge(ctx: &CanvasRenderingContext2d, node_map: &HashMap<&str, &Node>, edge: &crate::state::Edge, camera: &Camera, is_selected: bool) {
+fn draw_edge(
+    ctx: &CanvasRenderingContext2d,
+    node_map: &HashMap<&str, &Node>,
+    edge: &crate::state::Edge,
+    camera: &Camera,
+    is_selected: bool,
+) {
     let from_node = node_map.get(edge.from_node.as_str());
     let to_node = node_map.get(edge.to_node.as_str());
 
@@ -694,8 +791,22 @@ fn draw_edge(ctx: &CanvasRenderingContext2d, node_map: &HashMap<&str, &Node>, ed
         let to_cy = to.y + to.height / 2.0;
 
         // Clip line to node boundaries (world coordinates)
-        let (from_bx, from_by) = clip_line_to_rect(to_cx, to_cy, from_cx, from_cy, from.width / 2.0, from.height / 2.0);
-        let (to_bx, to_by) = clip_line_to_rect(from_cx, from_cy, to_cx, to_cy, to.width / 2.0, to.height / 2.0);
+        let (from_bx, from_by) = clip_line_to_rect(
+            to_cx,
+            to_cy,
+            from_cx,
+            from_cy,
+            from.width / 2.0,
+            from.height / 2.0,
+        );
+        let (to_bx, to_by) = clip_line_to_rect(
+            from_cx,
+            from_cy,
+            to_cx,
+            to_cy,
+            to.width / 2.0,
+            to.height / 2.0,
+        );
 
         let (from_sx, from_sy) = camera.world_to_screen(from_bx, from_by);
         let (to_sx, to_sy) = camera.world_to_screen(to_bx, to_by);
@@ -759,7 +870,14 @@ fn draw_edge_preview(
 
         // Clip line start to source node boundary
         let (to_wx, to_wy) = camera.screen_to_world(to_screen_x, to_screen_y);
-        let (from_bx, from_by) = clip_line_to_rect(to_wx, to_wy, from_cx, from_cy, from.width / 2.0, from.height / 2.0);
+        let (from_bx, from_by) = clip_line_to_rect(
+            to_wx,
+            to_wy,
+            from_cx,
+            from_cy,
+            from.width / 2.0,
+            from.height / 2.0,
+        );
         let (from_sx, from_sy) = camera.world_to_screen(from_bx, from_by);
 
         let angle = (to_screen_y - from_sy).atan2(to_screen_x - from_sx);
@@ -818,16 +936,46 @@ fn draw_resize_handles(
     ctx.stroke_rect(screen_x - half, screen_y - half, handle_size, handle_size);
 
     // Top-right
-    ctx.fill_rect(screen_x + screen_width - half, screen_y - half, handle_size, handle_size);
-    ctx.stroke_rect(screen_x + screen_width - half, screen_y - half, handle_size, handle_size);
+    ctx.fill_rect(
+        screen_x + screen_width - half,
+        screen_y - half,
+        handle_size,
+        handle_size,
+    );
+    ctx.stroke_rect(
+        screen_x + screen_width - half,
+        screen_y - half,
+        handle_size,
+        handle_size,
+    );
 
     // Bottom-left
-    ctx.fill_rect(screen_x - half, screen_y + screen_height - half, handle_size, handle_size);
-    ctx.stroke_rect(screen_x - half, screen_y + screen_height - half, handle_size, handle_size);
+    ctx.fill_rect(
+        screen_x - half,
+        screen_y + screen_height - half,
+        handle_size,
+        handle_size,
+    );
+    ctx.stroke_rect(
+        screen_x - half,
+        screen_y + screen_height - half,
+        handle_size,
+        handle_size,
+    );
 
     // Bottom-right
-    ctx.fill_rect(screen_x + screen_width - half, screen_y + screen_height - half, handle_size, handle_size);
-    ctx.stroke_rect(screen_x + screen_width - half, screen_y + screen_height - half, handle_size, handle_size);
+    ctx.fill_rect(
+        screen_x + screen_width - half,
+        screen_y + screen_height - half,
+        handle_size,
+        handle_size,
+    );
+    ctx.stroke_rect(
+        screen_x + screen_width - half,
+        screen_y + screen_height - half,
+        handle_size,
+        handle_size,
+    );
 }
 
 /// Wrap text into multiple lines that fit within max_width
@@ -856,9 +1004,9 @@ fn wrap_text(ctx: &CanvasRenderingContext2d, text: &str, max_width: f64) -> Vec<
                 format!("{} {}", current_line, word)
             };
 
-            let metrics = ctx.measure_text(&test_line).unwrap_or_else(|_| {
-                ctx.measure_text("").unwrap()
-            });
+            let metrics = ctx
+                .measure_text(&test_line)
+                .unwrap_or_else(|_| ctx.measure_text("").unwrap());
 
             if metrics.width() <= max_width || current_line.is_empty() {
                 current_line = test_line;
@@ -937,9 +1085,7 @@ fn set_font_px(ctx: &CanvasRenderingContext2d, font_px: u32) {
     LAST_FONT_STR.with(|f| ctx.set_font(&f.borrow()));
 }
 
-pub fn get_canvas_context(
-    canvas: &HtmlCanvasElement,
-) -> Result<CanvasRenderingContext2d, JsValue> {
+pub fn get_canvas_context(canvas: &HtmlCanvasElement) -> Result<CanvasRenderingContext2d, JsValue> {
     Ok(canvas
         .get_context("2d")?
         .ok_or_else(|| JsValue::from_str("Failed to get 2d context"))?
@@ -1087,7 +1233,14 @@ mod tests {
         #[test]
         fn just_outside_but_within_margin_is_kept() {
             // Right edge sits at x=-CULL_MARGIN+1, still inside the kept band.
-            assert!(!box_outside_viewport(-200.0, 100.0, -CULL_MARGIN + 1.0, 200.0, W, H));
+            assert!(!box_outside_viewport(
+                -200.0,
+                100.0,
+                -CULL_MARGIN + 1.0,
+                200.0,
+                W,
+                H
+            ));
         }
 
         #[test]

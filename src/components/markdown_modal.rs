@@ -1,8 +1,8 @@
-use leptos::prelude::*;
-use crate::app::{BoardDataCtx, EditingCtx, is_local_md_file, parse_markdown};
+use crate::app::{is_local_md_file, parse_markdown, BoardDataCtx, EditingCtx};
 use crate::canvas::LoadState;
 use crate::interaction::BoardAction;
 use crate::state::NodeType;
+use leptos::prelude::*;
 
 #[component]
 pub fn MarkdownModal() -> impl IntoView {

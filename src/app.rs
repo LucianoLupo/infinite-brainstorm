@@ -2,7 +2,7 @@ use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCac
 use crate::components::{ErrorBanner, ImageModal, MarkdownModal, MarkdownOverlays, NodeEditor};
 use crate::history::History;
 use crate::interaction::{reduce, BoardAction, SideEffect};
-use crate::state::{Board, Camera, Edge, LinkPreview, Node, ResizeHandle, RESIZE_HANDLE_SIZE, MIN_NODE_WIDTH, MIN_NODE_HEIGHT};
+use crate::state::{Board, Camera, Edge, LinkPreview, Node, NodeType, ResizeHandle, RESIZE_HANDLE_SIZE, MIN_NODE_WIDTH, MIN_NODE_HEIGHT};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use pulldown_cmark::{html, Event, Parser};
@@ -749,7 +749,7 @@ pub fn App() -> impl IntoView {
             let current_board = board.get();
 
             for node in &current_board.nodes {
-                if node.node_type == "image" && !node.text.is_empty() {
+                if node.node_type == NodeType::Image && !node.text.is_empty() {
                     let url = node.text.clone();
 
                     let needs_load = {
@@ -834,7 +834,7 @@ pub fn App() -> impl IntoView {
             let current_board = board.get();
 
             for node in &current_board.nodes {
-                if node.node_type == "link" && !node.text.is_empty() {
+                if node.node_type == NodeType::Link && !node.text.is_empty() {
                     let url = node.text.clone();
 
                     // SSRF gate: only auto-fetch previews for clearly-public
@@ -913,7 +913,7 @@ pub fn App() -> impl IntoView {
         let current_cache = md_file_cache.get();
 
         for node in &current_board.nodes {
-            if node.node_type == "link" && is_local_md_file(&node.text) {
+            if node.node_type == NodeType::Link && is_local_md_file(&node.text) {
                 let path = node.text.clone();
 
                 if !current_cache.contains_key(&path) {
@@ -1055,7 +1055,7 @@ pub fn App() -> impl IntoView {
                 }
 
                 // Copy link URL to clipboard when clicking a link node
-                if node.node_type == "link" && !node.text.is_empty() {
+                if node.node_type == NodeType::Link && !node.text.is_empty() {
                     let url = node.text.clone();
                     spawn_local(async move {
                         if let Some(window) = web_sys::window() {
@@ -1393,19 +1393,19 @@ pub fn App() -> impl IntoView {
                 .find(|n| n.contains_point(world_x, world_y));
 
             if let Some(node) = clicked_node {
-                if node.node_type == "image" {
+                if node.node_type == NodeType::Image {
                     // Open image in modal - get src from cached HtmlImageElement
                     let cache = image_cache_for_modal.borrow();
                     if let Some(Some(img)) = cache.get(&node.text) {
                         set_modal_image.set(Some(img.src()));
                     }
-                } else if node.node_type == "md" {
+                } else if node.node_type == NodeType::Md {
                     // Open MD in modal (view mode)
                     set_modal_md.set(Some((node.id.clone(), false)));
-                } else if node.node_type == "link" && is_local_md_file(&node.text) {
+                } else if node.node_type == NodeType::Link && is_local_md_file(&node.text) {
                     // Open local .md file in modal (view mode)
                     set_modal_md.set(Some((node.id.clone(), false)));
-                } else if node.node_type == "link" {
+                } else if node.node_type == NodeType::Link {
                     // Open regular link in browser
                     if let Some(window) = web_sys::window() {
                         let _ = window.open_with_url_and_target(&node.text, "_blank");
@@ -1588,7 +1588,7 @@ pub fn App() -> impl IntoView {
                         width: node_width,
                         height: node_height,
                         text: paste_result.path,
-                        node_type: "image".to_string(),
+                        node_type: NodeType::Image,
                         color: None,
                         tags: Vec::new(),
                         status: None,

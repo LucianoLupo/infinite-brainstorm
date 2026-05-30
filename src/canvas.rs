@@ -1,5 +1,7 @@
 use crate::app::is_local_md_file;
-use crate::state::{Board, Camera, LinkPreview, Node, RESIZE_HANDLE_SIZE};
+use crate::state::{
+    truncate_filename, Board, Camera, LinkPreview, Node, NodeType, RESIZE_HANDLE_SIZE,
+};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -166,13 +168,13 @@ fn draw_node(
     let screen_width = node.width * camera.zoom;
     let screen_height = node.height * camera.zoom;
 
-    let bg_color = match node.node_type.as_str() {
-        "idea" => NODE_BG_IDEA,
-        "note" => NODE_BG_NOTE,
-        "image" => NODE_BG_IMAGE,
-        "md" => NODE_BG_MD,
-        "link" => NODE_BG_LINK,
-        _ => NODE_BG_TEXT,
+    let bg_color = match node.node_type {
+        NodeType::Idea => NODE_BG_IDEA,
+        NodeType::Note => NODE_BG_NOTE,
+        NodeType::Image => NODE_BG_IMAGE,
+        NodeType::Md => NODE_BG_MD,
+        NodeType::Link => NODE_BG_LINK,
+        NodeType::Text | NodeType::Unknown => NODE_BG_TEXT,
     };
     ctx.set_fill_style_str(bg_color);
     ctx.fill_rect(screen_x, screen_y, screen_width, screen_height);
@@ -192,21 +194,21 @@ fn draw_node(
     ctx.stroke_rect(screen_x, screen_y, screen_width, screen_height);
     ctx.set_shadow_blur(0.0);
 
-    match node.node_type.as_str() {
-        "image" => {
+    match node.node_type {
+        NodeType::Image => {
             draw_image_content(ctx, node, camera, screen_x, screen_y, screen_width, screen_height, image_cache);
         }
-        "link" => {
+        NodeType::Link => {
             // Local .md files are rendered via HTML overlay like md nodes
             if !is_local_md_file(&node.text) {
                 draw_link_content(ctx, node, camera, screen_x, screen_y, screen_width, screen_height, image_cache, link_preview_cache);
             }
             // Otherwise just show background + label (content handled by HTML overlay)
         }
-        "md" => {
+        NodeType::Md => {
             // MD nodes render their content via HTML overlay, just show background + label
         }
-        _ => {
+        NodeType::Text | NodeType::Idea | NodeType::Note | NodeType::Unknown => {
             if !is_editing {
                 ctx.set_fill_style_str(if is_selected { TEXT_COLOR } else { TEXT_DIM });
                 let font_size = (12.0 * camera.zoom).max(8.0);
@@ -225,13 +227,13 @@ fn draw_node(
         }
     }
 
-    let type_indicator = match node.node_type.as_str() {
-        "idea" => "[IDEA]",
-        "note" => "[NOTE]",
-        "image" => "[IMAGE]",
-        "md" => "[MD]",
-        "link" => "[LINK]",
-        _ => "[TEXT]",
+    let type_indicator = match node.node_type {
+        NodeType::Idea => "[IDEA]",
+        NodeType::Note => "[NOTE]",
+        NodeType::Image => "[IMAGE]",
+        NodeType::Md => "[MD]",
+        NodeType::Link => "[LINK]",
+        NodeType::Text | NodeType::Unknown => "[TEXT]",
     };
     ctx.set_fill_style_str(TEXT_DIM);
     let small_font = (9.0 * camera.zoom).max(6.0);
@@ -242,7 +244,7 @@ fn draw_node(
     let _ = ctx.fill_text(type_indicator, screen_x + pad, screen_y + pad);
 
     if let Some(priority) = node.priority {
-        let p_text = format!("P{}", priority.min(5));
+        let p_text = format!("P{}", priority.clamp(1, 5));
         let type_width = ctx.measure_text(type_indicator).map(|m| m.width()).unwrap_or(30.0);
         let _ = ctx.fill_text(&p_text, screen_x + pad + type_width + pad, screen_y + pad);
     }
@@ -316,11 +318,7 @@ fn draw_image_content(
 
             // Show filename
             let filename = url.rsplit('/').next().unwrap_or(url);
-            let truncated = if filename.len() > 20 {
-                format!("{}...", &filename[..17])
-            } else {
-                filename.to_string()
-            };
+            let truncated = truncate_filename(filename);
             ctx.set_fill_style_str(TEXT_DIM);
             let small_font = (9.0 * camera.zoom).max(6.0);
             ctx.set_font(&format!("{}px {}", small_font, FONT));

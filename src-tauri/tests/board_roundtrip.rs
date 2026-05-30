@@ -2,7 +2,7 @@
 //! (`load_board_at` / `write_board_atomic`). Run against real temp dirs so the
 //! on-disk format is exercised end to end, not just in-memory serde.
 
-use infinite_brainstorm_lib::{load_board_at, write_board_atomic, Board, Edge, Node};
+use infinite_brainstorm_lib::{load_board_at, write_board_atomic, Board, Edge, Node, NodeType};
 
 fn sample_node(id: &str, text: &str) -> Node {
     Node {
@@ -12,7 +12,7 @@ fn sample_node(id: &str, text: &str) -> Node {
         width: 200.0,
         height: 100.0,
         text: text.to_string(),
-        node_type: "text".to_string(),
+        node_type: NodeType::Text,
         color: None,
         tags: vec![],
         status: None,
@@ -32,7 +32,7 @@ fn decorated_board() -> Board {
                 width: 240.0,
                 height: 120.0,
                 text: "Decorated".to_string(),
-                node_type: "idea".to_string(),
+                node_type: NodeType::Idea,
                 color: Some("#ff6600".to_string()),
                 tags: vec!["urgent".to_string(), "pricing".to_string()],
                 status: Some("in-progress".to_string()),

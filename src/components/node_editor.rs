@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use crate::app::BoardCtx;
 use crate::interaction::BoardAction;
+use crate::state::NodeType;
 
 #[component]
 pub fn NodeEditor() -> impl IntoView {
@@ -17,7 +18,7 @@ pub fn NodeEditor() -> impl IntoView {
                 let screen_h = node.height * cam.zoom;
                 let font_size = (14.0 * cam.zoom).max(8.0);
                 let initial_text = node.text.clone();
-                let is_md = node.node_type == "md";
+                let is_md = node.node_type == NodeType::Md;
 
                 if is_md {
                     let node_id_for_blur = node_id.clone();

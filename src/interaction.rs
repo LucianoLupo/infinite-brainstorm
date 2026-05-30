@@ -11,20 +11,20 @@
 //! thin `apply` wrapper that snapshots history once and runs `reduce`, then sets the
 //! board signal and dispatches the returned side effects.
 
-use crate::state::{Board, Edge, Node};
+use crate::state::{Board, Edge, Node, NodeType};
+use std::str::FromStr;
 
-/// How node type cycling progresses when the user presses `T`.
+/// How node type cycling progresses when the user presses `T`, expressed over the
+/// string form for callers that still work with raw `node_type` strings.
 ///
-/// Pure helper so both the reducer and any caller share one definition.
+/// Delegates to [`NodeType::cycle`] so the progression has a single source of truth;
+/// unrecognized inputs cycle to `"text"`.
 pub fn cycle_node_type(current: &str) -> String {
-    match current {
-        "text" => "idea".to_string(),
-        "idea" => "note".to_string(),
-        "note" => "image".to_string(),
-        "image" => "md".to_string(),
-        "md" => "link".to_string(),
-        _ => "text".to_string(),
-    }
+    NodeType::from_str(current)
+        .unwrap_or(NodeType::Unknown)
+        .cycle()
+        .as_str()
+        .to_string()
 }
 
 /// A side effect the caller must perform after a [`reduce`] call.
@@ -146,7 +146,7 @@ pub fn reduce(mut board: Board, action: BoardAction) -> (Board, Vec<SideEffect>)
             if !node_ids.is_empty() {
                 for node in &board.nodes {
                     if node_ids.contains(&node.id)
-                        && node.node_type == "image"
+                        && node.node_type == NodeType::Image
                         && is_local_asset(&node.text)
                     {
                         effects.push(SideEffect::DeleteAsset(node.text.clone()));
@@ -163,7 +163,7 @@ pub fn reduce(mut board: Board, action: BoardAction) -> (Board, Vec<SideEffect>)
         BoardAction::CycleType(ids) => {
             for node in &mut board.nodes {
                 if ids.contains(&node.id) {
-                    node.node_type = cycle_node_type(&node.node_type);
+                    node.node_type = node.node_type.cycle();
                 }
             }
             (board, vec![SideEffect::RequestSave])
@@ -337,10 +337,10 @@ mod tests {
     #[test]
     fn delete_selected_emits_asset_deletion_for_local_images() {
         let mut img = node("img", 0.0, 0.0);
-        img.node_type = "image".to_string();
+        img.node_type = NodeType::Image;
         img.text = "/Users/me/proj/assets/pic.png".to_string();
         let mut remote = node("remote", 0.0, 0.0);
-        remote.node_type = "image".to_string();
+        remote.node_type = NodeType::Image;
         remote.text = "https://example.com/pic.png".to_string();
         let board = board_with(vec![img, remote], vec![]);
         let (out, fx) = reduce(
@@ -380,14 +380,14 @@ mod tests {
     #[test]
     fn cycle_type_advances_only_selected() {
         let mut a = node("a", 0.0, 0.0);
-        a.node_type = "text".to_string();
+        a.node_type = NodeType::Text;
         let mut b = node("b", 0.0, 0.0);
-        b.node_type = "idea".to_string();
+        b.node_type = NodeType::Idea;
         let board = board_with(vec![a, b], vec![]);
         let (out, fx) = reduce(board, BoardAction::CycleType(vec!["a".into()]));
-        assert_eq!(out.nodes.iter().find(|n| n.id == "a").unwrap().node_type, "idea");
+        assert_eq!(out.nodes.iter().find(|n| n.id == "a").unwrap().node_type, NodeType::Idea);
         // b unselected, unchanged.
-        assert_eq!(out.nodes.iter().find(|n| n.id == "b").unwrap().node_type, "idea");
+        assert_eq!(out.nodes.iter().find(|n| n.id == "b").unwrap().node_type, NodeType::Idea);
         assert_eq!(fx, vec![SideEffect::RequestSave]);
     }
 

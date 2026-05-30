@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use crate::app::{BoardCtx, is_local_md_file, parse_markdown};
+use crate::state::NodeType;
 
 #[component]
 pub fn MarkdownOverlays() -> impl IntoView {
@@ -14,15 +15,15 @@ pub fn MarkdownOverlays() -> impl IntoView {
         b.nodes
             .iter()
             .filter(|n| {
-                let is_md_node = n.node_type == "md";
-                let is_md_link = n.node_type == "link" && is_local_md_file(&n.text);
+                let is_md_node = n.node_type == NodeType::Md;
+                let is_md_link = n.node_type == NodeType::Link && is_local_md_file(&n.text);
                 (is_md_node || is_md_link) && current_editing.as_ref() != Some(&n.id)
             })
             .map(|node| {
                 let (screen_x, screen_y) = cam.world_to_screen(node.x, node.y);
                 let label_height = 16.0 * cam.zoom;
 
-                let content = if node.node_type == "md" {
+                let content = if node.node_type == NodeType::Md {
                     node.text.clone()
                 } else {
                     md_cache

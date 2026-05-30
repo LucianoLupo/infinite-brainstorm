@@ -1,6 +1,19 @@
 use serde::{Deserialize, Serialize};
 
 pub const RESIZE_HANDLE_SIZE: f64 = 8.0;
+
+/// Char-safe filename truncation for display labels.
+///
+/// Truncates on `char` boundaries (never byte offsets) so multibyte names
+/// (emoji, CJK, accented latin) cannot panic on a mid-codepoint slice. Names with
+/// more than 20 characters are cut to the first 17 chars plus an ellipsis.
+pub fn truncate_filename(filename: &str) -> String {
+    if filename.chars().count() > 20 {
+        format!("{}...", filename.chars().take(17).collect::<String>())
+    } else {
+        filename.to_string()
+    }
+}
 pub const MIN_NODE_WIDTH: f64 = 50.0;
 pub const MIN_NODE_HEIGHT: f64 = 30.0;
 
@@ -10,6 +23,71 @@ pub enum ResizeHandle {
     TopRight,
     BottomLeft,
     BottomRight,
+}
+
+/// The visual/behavioral kind of a node.
+///
+/// Serializes lowercase (`"text"`, `"idea"`, …) to match the on-disk `board.json`
+/// schema. An unrecognized value deserializes to [`NodeType::Unknown`] rather than
+/// failing, preserving forward-compatibility: agents can write a future node type
+/// and the app round-trips the board without dropping nodes (the kind just renders
+/// with the neutral `text` fallback styling).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeType {
+    #[default]
+    Text,
+    Idea,
+    Note,
+    Image,
+    Md,
+    Link,
+    #[serde(other)]
+    Unknown,
+}
+
+impl NodeType {
+    /// Lowercase wire/string form, matching the serde representation.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NodeType::Text => "text",
+            NodeType::Idea => "idea",
+            NodeType::Note => "note",
+            NodeType::Image => "image",
+            NodeType::Md => "md",
+            NodeType::Link => "link",
+            NodeType::Unknown => "unknown",
+        }
+    }
+
+    /// Next type in the `T`-key cycle. Single source of truth for the progression.
+    /// `Unknown` (and the tail `Link`) wrap back to `Text`.
+    pub fn cycle(self) -> NodeType {
+        match self {
+            NodeType::Text => NodeType::Idea,
+            NodeType::Idea => NodeType::Note,
+            NodeType::Note => NodeType::Image,
+            NodeType::Image => NodeType::Md,
+            NodeType::Md => NodeType::Link,
+            NodeType::Link | NodeType::Unknown => NodeType::Text,
+        }
+    }
+}
+
+impl std::str::FromStr for NodeType {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "text" => NodeType::Text,
+            "idea" => NodeType::Idea,
+            "note" => NodeType::Note,
+            "image" => NodeType::Image,
+            "md" => NodeType::Md,
+            "link" => NodeType::Link,
+            _ => NodeType::Unknown,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -28,8 +106,8 @@ pub struct Node {
     #[serde(default)]
     pub height: f64,
     pub text: String,
-    #[serde(default = "default_node_type")]
-    pub node_type: String,
+    #[serde(default)]
+    pub node_type: NodeType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -42,10 +120,6 @@ pub struct Node {
     pub priority: Option<u8>,
 }
 
-pub fn default_node_type() -> String {
-    "text".to_string()
-}
-
 impl Node {
     pub fn new(id: String, x: f64, y: f64, text: String) -> Self {
         Self {
@@ -55,7 +129,7 @@ impl Node {
             width: 200.0,
             height: 100.0,
             text,
-            node_type: "text".to_string(),
+            node_type: NodeType::Text,
             color: None,
             tags: Vec::new(),
             status: None,
@@ -137,11 +211,17 @@ pub struct LinkPreview {
     pub site_name: Option<String>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Camera {
     pub x: f64,
     pub y: f64,
     pub zoom: f64,
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Camera {
@@ -154,8 +234,16 @@ impl Camera {
     }
 
     pub fn screen_to_world(&self, screen_x: f64, screen_y: f64) -> (f64, f64) {
-        let world_x = (screen_x / self.zoom) + self.x;
-        let world_y = (screen_y / self.zoom) + self.y;
+        // Guard against a non-finite or non-positive zoom (e.g. a hand-edited
+        // board.json, a derived `Default`, or accumulated float error) which would
+        // otherwise divide by zero and produce NaN/inf world coordinates.
+        let zoom = if self.zoom.is_finite() && self.zoom > 0.0 {
+            self.zoom
+        } else {
+            1.0
+        };
+        let world_x = (screen_x / zoom) + self.x;
+        let world_y = (screen_y / zoom) + self.y;
         (world_x, world_y)
     }
 
@@ -179,6 +267,35 @@ mod tests {
             assert_eq!(cam.x, 0.0);
             assert_eq!(cam.y, 0.0);
             assert_eq!(cam.zoom, 1.0);
+        }
+
+        #[test]
+        fn default_matches_new() {
+            let cam = Camera::default();
+            assert_eq!(cam.x, 0.0);
+            assert_eq!(cam.y, 0.0);
+            assert_eq!(cam.zoom, 1.0);
+        }
+
+        #[test]
+        fn screen_to_world_guards_zero_zoom() {
+            // A zoom of 0 would divide by zero; the guard falls back to 1.0.
+            let cam = Camera { x: 10.0, y: 20.0, zoom: 0.0 };
+            let (wx, wy) = cam.screen_to_world(100.0, 200.0);
+            assert!(wx.is_finite() && wy.is_finite());
+            assert_eq!(wx, 110.0);
+            assert_eq!(wy, 220.0);
+        }
+
+        #[test]
+        fn screen_to_world_guards_nan_and_negative_zoom() {
+            for bad in [f64::NAN, f64::INFINITY, -2.0] {
+                let cam = Camera { x: 0.0, y: 0.0, zoom: bad };
+                let (wx, wy) = cam.screen_to_world(50.0, 50.0);
+                assert!(wx.is_finite() && wy.is_finite(), "zoom {bad} produced non-finite");
+                assert_eq!(wx, 50.0);
+                assert_eq!(wy, 50.0);
+            }
         }
 
         #[test]
@@ -260,7 +377,7 @@ mod tests {
             assert_eq!(node.width, 200.0);
             assert_eq!(node.height, 100.0);
             assert_eq!(node.text, "Hello");
-            assert_eq!(node.node_type, "text");
+            assert_eq!(node.node_type, NodeType::Text);
             assert_eq!(node.color, None);
             assert!(node.tags.is_empty());
             assert_eq!(node.status, None);
@@ -406,7 +523,7 @@ mod tests {
                         width: 200.0,
                         height: 100.0,
                         text: "Second".to_string(),
-                        node_type: "idea".to_string(),
+                        node_type: NodeType::Idea,
                         color: None,
                         tags: Vec::new(),
                         status: None,
@@ -443,7 +560,7 @@ mod tests {
             }"#;
 
             let board: Board = serde_json::from_str(json).unwrap();
-            assert_eq!(board.nodes[0].node_type, "text");
+            assert_eq!(board.nodes[0].node_type, NodeType::Text);
         }
 
         #[test]
@@ -486,7 +603,7 @@ mod tests {
                 id: "m1".to_string(),
                 x: 0.0, y: 0.0, width: 200.0, height: 100.0,
                 text: "Meta node".to_string(),
-                node_type: "idea".to_string(),
+                node_type: NodeType::Idea,
                 color: Some("#ff6600".to_string()),
                 tags: vec!["urgent".to_string(), "pricing".to_string()],
                 status: Some("in-progress".to_string()),
@@ -533,7 +650,7 @@ mod tests {
                     width: 200.0,
                     height: 100.0,
                     text: "Hello \"world\"".to_string(),
-                    node_type: "text".to_string(),
+                    node_type: NodeType::Text,
                     color: None,
                     tags: vec![],
                     status: None,
@@ -679,7 +796,7 @@ mod tests {
                 width: 50.0,
                 height: 25.0,
                 text: "tiny".to_string(),
-                node_type: "text".to_string(),
+                node_type: NodeType::Text,
                 color: None,
                 tags: Vec::new(),
                 status: None,
@@ -731,7 +848,7 @@ mod tests {
                 width: 200.0,
                 height: 100.0,
                 text: text.to_string(),
-                node_type: "text".to_string(),
+                node_type: NodeType::Text,
                 color: None,
                 tags: vec![],
                 status: None,
@@ -746,16 +863,23 @@ mod tests {
 
         #[test]
         fn all_node_types() {
-            let types = vec!["text", "idea", "note", "image", "md", "link"];
+            let types = [
+                NodeType::Text,
+                NodeType::Idea,
+                NodeType::Note,
+                NodeType::Image,
+                NodeType::Md,
+                NodeType::Link,
+            ];
             for node_type in types {
                 let node = Node {
-                    id: format!("node-{}", node_type),
+                    id: format!("node-{}", node_type.as_str()),
                     x: 0.0,
                     y: 0.0,
                     width: 200.0,
                     height: 100.0,
                     text: "content".to_string(),
-                    node_type: node_type.to_string(),
+                    node_type,
                     color: None,
                     tags: vec![],
                     status: None,
@@ -764,6 +888,7 @@ mod tests {
                 };
 
                 let json = serde_json::to_string(&node).unwrap();
+                assert!(json.contains(&format!("\"node_type\":\"{}\"", node_type.as_str())));
                 let deserialized: Node = serde_json::from_str(&json).unwrap();
                 assert_eq!(deserialized.node_type, node_type);
             }
@@ -778,7 +903,7 @@ mod tests {
                 width: 200.123,
                 height: 100.789,
                 text: "precise".to_string(),
-                node_type: "text".to_string(),
+                node_type: NodeType::Text,
                 color: None,
                 tags: vec![],
                 status: None,
@@ -889,7 +1014,7 @@ mod tests {
                 width: 200.0,
                 height: 100.0,
                 text: large_text.clone(),
-                node_type: "text".to_string(),
+                node_type: NodeType::Text,
                 color: None,
                 tags: vec![],
                 status: None,
@@ -915,6 +1040,111 @@ mod tests {
                 let expected = x >= 100.0 && x <= 300.0 && y >= 100.0 && y <= 200.0;
                 assert_eq!(inside, expected, "Failed at ({}, {})", x, y);
             }
+        }
+    }
+
+    mod node_type_tests {
+        use super::*;
+
+        #[test]
+        fn default_is_text() {
+            assert_eq!(NodeType::default(), NodeType::Text);
+        }
+
+        #[test]
+        fn serializes_lowercase() {
+            assert_eq!(serde_json::to_string(&NodeType::Idea).unwrap(), "\"idea\"");
+            assert_eq!(serde_json::to_string(&NodeType::Md).unwrap(), "\"md\"");
+            assert_eq!(serde_json::to_string(&NodeType::Link).unwrap(), "\"link\"");
+        }
+
+        #[test]
+        fn deserializes_known_variants() {
+            for s in ["text", "idea", "note", "image", "md", "link"] {
+                let nt: NodeType = serde_json::from_str(&format!("\"{s}\"")).unwrap();
+                assert_eq!(nt.as_str(), s);
+            }
+        }
+
+        #[test]
+        fn unknown_variant_is_forward_compatible() {
+            // A future/unrecognized node_type must not fail deserialization; it maps
+            // to Unknown so the node round-trips instead of being dropped.
+            let nt: NodeType = serde_json::from_str("\"hologram\"").unwrap();
+            assert_eq!(nt, NodeType::Unknown);
+
+            let json = r#"{
+                "nodes": [{
+                    "id": "n1", "x": 0, "y": 0, "text": "future",
+                    "node_type": "hologram"
+                }],
+                "edges": []
+            }"#;
+            let board: Board = serde_json::from_str(json).unwrap();
+            assert_eq!(board.nodes[0].node_type, NodeType::Unknown);
+        }
+
+        #[test]
+        fn cycle_progression() {
+            assert_eq!(NodeType::Text.cycle(), NodeType::Idea);
+            assert_eq!(NodeType::Idea.cycle(), NodeType::Note);
+            assert_eq!(NodeType::Note.cycle(), NodeType::Image);
+            assert_eq!(NodeType::Image.cycle(), NodeType::Md);
+            assert_eq!(NodeType::Md.cycle(), NodeType::Link);
+            assert_eq!(NodeType::Link.cycle(), NodeType::Text);
+            assert_eq!(NodeType::Unknown.cycle(), NodeType::Text);
+        }
+
+        #[test]
+        fn from_str_round_trips_as_str() {
+            use std::str::FromStr;
+            for nt in [
+                NodeType::Text,
+                NodeType::Idea,
+                NodeType::Note,
+                NodeType::Image,
+                NodeType::Md,
+                NodeType::Link,
+            ] {
+                assert_eq!(NodeType::from_str(nt.as_str()).unwrap(), nt);
+            }
+            assert_eq!(NodeType::from_str("nope").unwrap(), NodeType::Unknown);
+        }
+    }
+
+    mod truncate_tests {
+        use super::*;
+
+        #[test]
+        fn short_name_unchanged() {
+            assert_eq!(truncate_filename("photo.png"), "photo.png");
+        }
+
+        #[test]
+        fn long_ascii_name_truncated() {
+            let name = "a_very_long_filename_indeed.png";
+            let out = truncate_filename(name);
+            assert_eq!(out, "a_very_long_filen...");
+            assert_eq!(out.chars().count(), 20); // 17 + "..."
+        }
+
+        #[test]
+        fn multibyte_name_does_not_panic() {
+            // 16 ascii + emoji at char 17 boundary + tail: a byte slice [..17] would
+            // land mid-codepoint and panic. char-safe truncation must not.
+            let name = "abcdefghijklmnop😀extra.png";
+            let out = truncate_filename(name);
+            assert!(out.ends_with("..."));
+            // First 17 chars then ellipsis: the emoji is char index 16 (0-based).
+            assert_eq!(out, "abcdefghijklmnop😀...");
+        }
+
+        #[test]
+        fn all_multibyte_name_does_not_panic() {
+            let name = "世界世界世界世界世界世界世界世界世界世界世界.png";
+            let out = truncate_filename(name);
+            assert!(out.ends_with("..."));
+            assert_eq!(out.chars().count(), 20);
         }
     }
 }

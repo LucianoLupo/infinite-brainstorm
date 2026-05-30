@@ -1,4 +1,4 @@
-use infinite_brainstorm_lib::{write_board_atomic, Board, Edge, Node};
+use infinite_brainstorm_lib::{write_board_atomic, Board, Edge, Node, NodeType};
 
 fn sample_node(id: &str, text: &str) -> Node {
     Node {
@@ -8,7 +8,7 @@ fn sample_node(id: &str, text: &str) -> Node {
         width: 200.0,
         height: 100.0,
         text: text.to_string(),
-        node_type: "text".to_string(),
+        node_type: NodeType::Text,
         color: None,
         tags: vec![],
         status: None,

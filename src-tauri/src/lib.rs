@@ -33,7 +33,7 @@ fn content_hash(content: &str) -> u64 {
     hasher.finish()
 }
 
-pub use brainstorm_types::{Board, Edge, LinkPreview, Node};
+pub use brainstorm_types::{Board, Edge, LinkPreview, Node, NodeType};
 
 fn get_board_path(_app: &AppHandle) -> PathBuf {
     // Use parent of src-tauri (project root) during dev, or current dir in production

@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use crate::app::{BoardCtx, is_local_md_file, parse_markdown};
 use crate::interaction::BoardAction;
+use crate::state::NodeType;
 
 #[component]
 pub fn MarkdownModal() -> impl IntoView {
@@ -75,7 +76,7 @@ pub fn MarkdownModal() -> impl IntoView {
                                     let b = ctx.board.get();
                                     let is_md_link = b.nodes.iter()
                                         .find(|n| n.id == node_id)
-                                        .map(|n| n.node_type == "link" && is_local_md_file(&n.text))
+                                        .map(|n| n.node_type == NodeType::Link && is_local_md_file(&n.text))
                                         .unwrap_or(false);
 
                                     if is_md_link {
@@ -129,7 +130,7 @@ pub fn MarkdownModal() -> impl IntoView {
                                     let content = b.nodes.iter()
                                         .find(|n| n.id == nid)
                                         .map(|n| {
-                                            if n.node_type == "link" && is_local_md_file(&n.text) {
+                                            if n.node_type == NodeType::Link && is_local_md_file(&n.text) {
                                                 md_cache_content
                                                     .get(&n.text)
                                                     .and_then(|opt: &Option<String>| opt.clone())

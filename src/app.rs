@@ -1,6 +1,7 @@
 use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache};
 use crate::components::{ErrorBanner, ImageModal, MarkdownModal, MarkdownOverlays, NodeEditor};
 use crate::history::History;
+use crate::interaction::{reduce, BoardAction, SideEffect};
 use crate::state::{Board, Camera, Edge, LinkPreview, Node, ResizeHandle, RESIZE_HANDLE_SIZE, MIN_NODE_WIDTH, MIN_NODE_HEIGHT};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -176,6 +177,143 @@ fn make_request_save(
     }
 }
 
+/// A single point on the undo/redo timeline: the full board plus the node
+/// selection at that moment. Snapshotting selection (not just the board) lets
+/// undo/redo *restore* what was selected instead of clearing it (F115).
+pub type Snapshot = (Board, HashSet<String>);
+
+/// Shared, non-reactive undo/redo stack. Mutations don't need reactivity, so it
+/// lives behind `Rc<RefCell<..>>` rather than a signal.
+type BoardHistory = Rc<RefCell<History<Snapshot>>>;
+
+/// `Copy` handle that routes every board mutation through one place.
+///
+/// `apply` is the single entry point: it snapshots history exactly once, runs the
+/// pure [`reduce`], commits the new board + selection to the signals, and
+/// dispatches the returned [`SideEffect`]s (asset deletion, debounced save). This
+/// is what collapses the previously-scattered `history.push` calls into one and
+/// fixes undo dropping in-progress edits (F52/F109).
+///
+/// The history `Rc` is `!Send`, so — like [`RequestSave`] — it is parked in
+/// thread-local `LocalStorage` arena storage, which keeps this struct `Copy` and
+/// cheap to stash in [`BoardCtx`] for the editor components to dispatch through.
+#[derive(Clone, Copy)]
+pub struct Dispatcher {
+    board: ReadSignal<Board>,
+    set_board: WriteSignal<Board>,
+    selected_nodes: ReadSignal<HashSet<String>>,
+    set_selected_nodes: WriteSignal<HashSet<String>>,
+    set_selected_edge: WriteSignal<Option<String>>,
+    history: StoredValue<BoardHistory, LocalStorage>,
+    request_save: RequestSave,
+}
+
+impl Dispatcher {
+    /// Capture the current `(board, node selection)` onto the undo stack.
+    ///
+    /// Exposed for the deferred-snapshot path (F114): drag/resize call this once on
+    /// the first actual movement (not on mouse-down) so a plain click never creates
+    /// a junk undo entry. [`apply`](Self::apply) calls it internally for one-shot
+    /// actions.
+    pub fn snapshot(&self) {
+        let snap = (self.board.get_untracked(), self.selected_nodes.get_untracked());
+        self.history.get_value().borrow_mut().push(snap);
+    }
+
+    /// Run the side effects a [`reduce`] call produced.
+    fn run_effects(&self, effects: Vec<SideEffect>) {
+        let mut asset_paths = Vec::new();
+        let mut wants_save = false;
+        for effect in effects {
+            match effect {
+                SideEffect::DeleteAsset(path) => asset_paths.push(path),
+                SideEffect::RequestSave => wants_save = true,
+            }
+        }
+
+        if asset_paths.is_empty() {
+            if wants_save {
+                self.request_save.call();
+            }
+        } else {
+            // Asset deletion is async (Tauri filesystem); save only after the
+            // deletions are issued so a single coalesced write reflects the result.
+            let request_save = self.request_save;
+            spawn_local(async move {
+                if is_tauri() {
+                    for path in asset_paths {
+                        #[derive(Serialize)]
+                        struct DeleteAssetArgs {
+                            path: String,
+                        }
+                        let args = serde_wasm_bindgen::to_value(&DeleteAssetArgs {
+                            path: path.clone(),
+                        })
+                        .unwrap();
+                        let _ = invoke("delete_asset", args).await;
+                    }
+                }
+                if wants_save {
+                    request_save.call();
+                }
+            });
+        }
+    }
+
+    /// Commit the reduced board + optional new selection and run side effects,
+    /// WITHOUT taking a new history snapshot. Used by continuous gestures
+    /// (drag/resize) where [`snapshot`](Self::snapshot) was already taken on the
+    /// first movement.
+    fn commit(&self, action: BoardAction, new_selection: Option<HashSet<String>>) {
+        let (next_board, effects) = reduce(self.board.get_untracked(), action);
+        self.set_board.set(next_board);
+        if let Some(selection) = new_selection {
+            self.set_selected_nodes.set(selection);
+        }
+        self.run_effects(effects);
+    }
+
+    /// The single mutation entry point: snapshot once, reduce, commit, dispatch.
+    ///
+    /// `new_selection` replaces the node selection when `Some` (e.g. select the
+    /// freshly created/pasted node, or clear selection after a delete); pass `None`
+    /// to leave selection untouched.
+    pub fn apply(&self, action: BoardAction, new_selection: Option<HashSet<String>>) {
+        self.snapshot();
+        self.commit(action, new_selection);
+    }
+
+    /// Undo the last mutation, restoring both the board and the selection that was
+    /// live when the snapshot was taken (F115). Returns `true` if anything changed.
+    pub fn undo(&self) -> bool {
+        let current = (self.board.get_untracked(), self.selected_nodes.get_untracked());
+        if let Some((board, selection)) = self.history.get_value().borrow_mut().undo(current) {
+            self.set_board.set(board);
+            self.set_selected_nodes.set(selection);
+            self.set_selected_edge.set(None);
+            self.request_save.call();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Redo the last undone mutation, restoring board + selection. Returns `true`
+    /// if anything changed.
+    pub fn redo(&self) -> bool {
+        let current = (self.board.get_untracked(), self.selected_nodes.get_untracked());
+        if let Some((board, selection)) = self.history.get_value().borrow_mut().redo(current) {
+            self.set_board.set(board);
+            self.set_selected_nodes.set(selection);
+            self.set_selected_edge.set(None);
+            self.request_save.call();
+            true
+        } else {
+            false
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct SaveBoardArgs {
     board: Board,
@@ -205,6 +343,10 @@ struct DragState {
     start_x: f64,
     start_y: f64,
     node_start_positions: HashMap<String, (f64, f64)>,
+    /// Whether an undo snapshot has been taken for this drag yet. Deferred to the
+    /// first actual movement (not mouse-down) so a plain click never creates a junk
+    /// undo entry (F114).
+    snapshotted: bool,
 }
 
 #[derive(Clone)]
@@ -247,17 +389,10 @@ struct ResizeState {
     original_y: f64,
     original_width: f64,
     original_height: f64,
-}
-
-fn cycle_node_type(current: &str) -> String {
-    match current {
-        "text" => "idea".to_string(),
-        "idea" => "note".to_string(),
-        "note" => "image".to_string(),
-        "image" => "md".to_string(),
-        "md" => "link".to_string(),
-        _ => "text".to_string(),
-    }
+    /// Whether an undo snapshot has been taken for this resize yet. Deferred to the
+    /// first actual movement so a click on a handle without dragging creates no junk
+    /// undo entry (F114).
+    snapshotted: bool,
 }
 
 pub(crate) fn parse_markdown(md: &str) -> String {
@@ -412,6 +547,9 @@ pub struct BoardCtx {
     /// True while a debounced local write is queued or in flight. The file watcher
     /// can check this to avoid reloading over the user's own pending edits.
     pub local_edit_pending: RwSignal<bool>,
+    /// Single mutation entry point. Editor components dispatch text edits through
+    /// this so each commit snapshots undo history (fixes undo dropping typed text).
+    pub dispatch: Dispatcher,
 }
 
 #[component]
@@ -433,14 +571,9 @@ pub fn App() -> impl IntoView {
     let (md_edit_text, set_md_edit_text) = signal::<String>(String::new()); // Separate signal to avoid re-render on typing
     let (node_clipboard, set_node_clipboard) = signal::<Option<(Vec<Node>, Vec<Edge>)>>(None);
 
-    // Undo/redo history - using Rc<RefCell> since mutations don't need reactivity
-    type BoardHistory = Rc<RefCell<History<Board>>>;
+    // Undo/redo history - using Rc<RefCell> since mutations don't need reactivity.
+    // Snapshots are (Board, node selection) so undo/redo restore the selection too.
     let history: BoardHistory = Rc::new(RefCell::new(History::new(100)));
-    let history_for_mouse_down = history.clone();
-    let history_for_mouse_up = history.clone();
-    let history_for_double_click = history.clone();
-    let history_for_keydown = history.clone();
-    let history_for_paste = history;  // Last clone can take ownership
 
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
     let file_input_ref = NodeRef::<leptos::html::Input>::new();
@@ -459,6 +592,17 @@ pub fn App() -> impl IntoView {
     let load_error = RwSignal::<Option<String>>::new(None);
     let local_edit_pending = RwSignal::<bool>::new(false);
     let request_save = make_request_save(board, local_edit_pending);
+
+    // Single mutation entry point shared by handlers and editor components.
+    let dispatch = Dispatcher {
+        board,
+        set_board,
+        selected_nodes,
+        set_selected_nodes,
+        set_selected_edge,
+        history: StoredValue::new_local(history),
+        request_save,
+    };
 
     provide_context(BoardCtx {
         board,
@@ -481,6 +625,7 @@ pub fn App() -> impl IntoView {
         load_error,
         request_save,
         local_edit_pending,
+        dispatch,
     });
 
     // Load board on startup (with small delay to ensure Tauri is ready)
@@ -792,9 +937,7 @@ pub fn App() -> impl IntoView {
         }
     });
 
-    let on_mouse_down = {
-        let history = history_for_mouse_down.clone();
-        move |ev: web_sys::MouseEvent| {
+    let on_mouse_down = move |ev: web_sys::MouseEvent| {
         if editing_node.get_untracked().is_some() {
             return;
         }
@@ -819,9 +962,9 @@ pub fn App() -> impl IntoView {
             .find_map(|n| n.resize_handle_at(world_x, world_y, handle_size).map(|h| (n, h)));
 
         if let Some((node, handle)) = resize_hit {
-            // Record history before resize starts
-            history.borrow_mut().push(board.get_untracked());
-            // Start resize operation
+            // History is NOT snapshotted here — it's deferred to the first actual
+            // resize movement in on_mouse_move (F114), so merely clicking a handle
+            // without dragging leaves no junk undo entry.
             set_resize_state.set(ResizeState {
                 is_resizing: true,
                 node_id: Some(node.id.clone()),
@@ -832,6 +975,7 @@ pub fn App() -> impl IntoView {
                 original_y: node.y,
                 original_width: node.width,
                 original_height: node.height,
+                snapshotted: false,
             });
             return;
         }
@@ -885,14 +1029,16 @@ pub fn App() -> impl IntoView {
                     set_selected_nodes.set([node.id.clone()].into_iter().collect());
                 }
 
-                // Record history before drag starts
-                history.borrow_mut().push(board.get_untracked());
+                // History is NOT snapshotted here — it's deferred to the first actual
+                // drag movement in on_mouse_move (F114), so a plain click (mouse down
+                // + up without moving) leaves no junk undo entry.
                 set_drag_state.set(DragState {
                     is_dragging: true,
                     is_box_selecting: false,
                     start_x: canvas_x,
                     start_y: canvas_y,
                     node_start_positions: start_positions,
+                    snapshotted: false,
                 });
             }
         } else {
@@ -925,6 +1071,7 @@ pub fn App() -> impl IntoView {
                         start_x: canvas_x,
                         start_y: canvas_y,
                         node_start_positions: HashMap::new(),
+                        snapshotted: false,
                     });
                 } else {
                     set_pan_state.set(PanState {
@@ -937,7 +1084,7 @@ pub fn App() -> impl IntoView {
                 }
             }
         }
-    }};
+    };
 
     let on_mouse_move = move |ev: web_sys::MouseEvent| {
         let canvas = canvas_ref.get().unwrap();
@@ -955,6 +1102,13 @@ pub fn App() -> impl IntoView {
             let (world_x, world_y) = cam.screen_to_world(canvas_x, canvas_y);
             let dx = world_x - current_resize.start_mouse_x;
             let dy = world_y - current_resize.start_mouse_y;
+
+            // Deferred undo snapshot: take it once, on the first actual resize move,
+            // capturing the board+selection BEFORE any geometry change (F114).
+            if !current_resize.snapshotted {
+                dispatch.snapshot();
+                set_resize_state.update(|s| s.snapshotted = true);
+            }
 
             set_board.update(|b| {
                 if let Some(node_id) = &current_resize.node_id {
@@ -1006,6 +1160,13 @@ pub fn App() -> impl IntoView {
             let cam = camera.get_untracked();
             let dx = (canvas_x - current_drag.start_x) / cam.zoom;
             let dy = (canvas_y - current_drag.start_y) / cam.zoom;
+
+            // Deferred undo snapshot: take it once, on the first actual drag move,
+            // capturing the board+selection BEFORE any position change (F114).
+            if !current_drag.snapshotted {
+                dispatch.snapshot();
+                set_drag_state.update(|s| s.snapshotted = true);
+            }
 
             set_board.update(|b| {
                 for (id, (start_x, start_y)) in &current_drag.node_start_positions {
@@ -1068,18 +1229,22 @@ pub fn App() -> impl IntoView {
         }
     };
 
-    let on_mouse_up = {
-        let history = history_for_mouse_up.clone();
-        move |ev: web_sys::MouseEvent| {
+    let on_mouse_up = move |ev: web_sys::MouseEvent| {
         let was_dragging = drag_state.get_untracked().is_dragging;
         let was_resizing = resize_state.get_untracked().is_resizing;
+        let resize_snapshotted = resize_state.get_untracked().snapshotted;
+        let drag_snapshotted = drag_state.get_untracked().snapshotted;
         let current_drag = drag_state.get_untracked();
         let edge_state = edge_creation.get_untracked();
 
         if was_resizing {
             set_resize_state.set(ResizeState::default());
 
-            request_save.call();
+            // Only persist if a snapshot was taken, i.e. the resize actually moved
+            // the node — a bare handle click without dragging changes nothing.
+            if resize_snapshotted {
+                request_save.call();
+            }
             return;
         }
 
@@ -1095,18 +1260,14 @@ pub fn App() -> impl IntoView {
                 let current_board = board.get_untracked();
                 if let Some(target) = current_board.nodes.iter().rev().find(|n| n.contains_point(world_x, world_y)) {
                     if &target.id != from_id {
-                        // Record history before edge creation
-                        history.borrow_mut().push(board.get_untracked());
-                        set_board.update(|b| {
-                            b.edges.push(Edge {
+                        dispatch.apply(
+                            BoardAction::CreateEdge {
                                 id: uuid::Uuid::new_v4().to_string(),
                                 from_node: from_id.clone(),
                                 to_node: target.id.clone(),
-                                label: None,
-                            });
-                        });
-
-                        request_save.call();
+                            },
+                            None,
+                        );
                     }
                 }
             }
@@ -1136,10 +1297,12 @@ pub fn App() -> impl IntoView {
         set_drag_state.set(DragState::default());
         set_pan_state.set(PanState::default());
 
-        if was_dragging {
+        // Only persist if the drag actually moved nodes (a snapshot was taken).
+        // A plain click (mouse down + up without moving) changes nothing (F114).
+        if was_dragging && drag_snapshotted {
             request_save.call();
         }
-    }};
+    };
 
     let on_wheel = move |ev: web_sys::WheelEvent| {
         ev.prevent_default();
@@ -1162,7 +1325,6 @@ pub fn App() -> impl IntoView {
     };
 
     let on_double_click = {
-        let history = history_for_double_click.clone();
         let image_cache_for_modal = image_cache_for_modal.clone();
         move |ev: web_sys::MouseEvent| {
             let canvas = canvas_ref.get().unwrap();
@@ -1211,22 +1373,16 @@ pub fn App() -> impl IntoView {
                 );
                 let new_id = new_node.id.clone();
 
-                // Record history before node creation
-                history.borrow_mut().push(board.get_untracked());
-                set_board.update(|b| {
-                    b.nodes.push(new_node);
-                });
-                set_selected_nodes.set([new_id.clone()].into_iter().collect());
+                dispatch.apply(
+                    BoardAction::CreateNode(new_node),
+                    Some([new_id.clone()].into_iter().collect()),
+                );
                 set_editing_node.set(Some(new_id));
-
-                request_save.call();
             }
         }
     };
 
-    let on_keydown = {
-        let history = history_for_keydown.clone();
-        move |ev: web_sys::KeyboardEvent| {
+    let on_keydown = move |ev: web_sys::KeyboardEvent| {
         if editing_node.get_untracked().is_some() {
             return;
         }
@@ -1240,67 +1396,31 @@ pub fn App() -> impl IntoView {
                 ev.prevent_default();
                 if ev.shift_key() {
                     // Redo: Ctrl+Shift+Z / Cmd+Shift+Z
-                    if let Some(new_board) = history.borrow_mut().redo(board.get_untracked()) {
-                        set_board.set(new_board);
-                        set_selected_nodes.set(HashSet::new());
-                        set_selected_edge.set(None);
-                        request_save.call();
-                    }
+                    dispatch.redo();
                 } else {
                     // Undo: Ctrl+Z / Cmd+Z
-                    if let Some(new_board) = history.borrow_mut().undo(board.get_untracked()) {
-                        set_board.set(new_board);
-                        set_selected_nodes.set(HashSet::new());
-                        set_selected_edge.set(None);
-                        request_save.call();
-                    }
+                    dispatch.undo();
                 }
             }
             "Backspace" | "Delete" => {
                 if let Some(edge_id) = edge_sel {
-                    // Record history before edge deletion
-                    history.borrow_mut().push(board.get_untracked());
-                    set_board.update(|b| {
-                        b.edges.retain(|e| e.id != edge_id);
-                    });
+                    dispatch.apply(
+                        BoardAction::DeleteSelected {
+                            node_ids: vec![],
+                            edge_id: Some(edge_id),
+                        },
+                        None,
+                    );
                     set_selected_edge.set(None);
-
-                    request_save.call();
                 } else if !selected.is_empty() {
-                    // Collect image paths to delete from assets folder
-                    let current_board = board.get_untracked();
-                    let image_paths_to_delete: Vec<String> = current_board
-                        .nodes
-                        .iter()
-                        .filter(|n| selected.contains(&n.id) && n.node_type == "image")
-                        .filter(|n| n.text.contains("/assets/")) // Only delete local assets
-                        .map(|n| n.text.clone())
-                        .collect();
-
-                    // Record history before node deletion
-                    history.borrow_mut().push(board.get_untracked());
-                    set_board.update(|b| {
-                        b.nodes.retain(|n| !selected.contains(&n.id));
-                        b.edges.retain(|e| !selected.contains(&e.from_node) && !selected.contains(&e.to_node));
-                    });
-                    set_selected_nodes.set(HashSet::new());
-
-                    if image_paths_to_delete.is_empty() {
-                        request_save.call();
-                    } else {
-                        spawn_local(async move {
-                            // Delete asset files from disk (Tauri only)
-                            if is_tauri() {
-                                for path in image_paths_to_delete {
-                                    #[derive(Serialize)]
-                                    struct DeleteAssetArgs { path: String }
-                                    let args = serde_wasm_bindgen::to_value(&DeleteAssetArgs { path: path.clone() }).unwrap();
-                                    let _ = invoke("delete_asset", args).await;
-                                }
-                            }
-                            request_save.call();
-                        });
-                    }
+                    // Asset cleanup is modeled as a SideEffect by the reducer.
+                    dispatch.apply(
+                        BoardAction::DeleteSelected {
+                            node_ids: selected.into_iter().collect(),
+                            edge_id: None,
+                        },
+                        Some(HashSet::new()),
+                    );
                 }
             }
             "c" if ev.meta_key() || ev.ctrl_key() => {
@@ -1352,31 +1472,23 @@ pub fn App() -> impl IntoView {
 
                         let new_ids: HashSet<String> = new_nodes.iter().map(|n| n.id.clone()).collect();
 
-                        history.borrow_mut().push(board.get_untracked());
-                        set_board.update(|b| {
-                            b.nodes.extend(new_nodes);
-                            b.edges.extend(new_edges);
-                        });
-                        set_selected_nodes.set(new_ids);
-
-                        request_save.call();
+                        dispatch.apply(
+                            BoardAction::PasteNodes {
+                                nodes: new_nodes,
+                                edges: new_edges,
+                            },
+                            Some(new_ids),
+                        );
                     }
                 }
                 // If no internal clipboard, let ClipboardEvent fire for image paste
             }
             "t" | "T" => {
                 if !selected.is_empty() {
-                    // Record history before type change
-                    history.borrow_mut().push(board.get_untracked());
-                    set_board.update(|b| {
-                        for node in &mut b.nodes {
-                            if selected.contains(&node.id) {
-                                node.node_type = cycle_node_type(&node.node_type);
-                            }
-                        }
-                    });
-
-                    request_save.call();
+                    dispatch.apply(
+                        BoardAction::CycleType(selected.into_iter().collect()),
+                        None,
+                    );
                 }
             }
             "Escape" => {
@@ -1390,11 +1502,9 @@ pub fn App() -> impl IntoView {
             }
             _ => {}
         }
-    }};
+    };
 
-    let on_paste = {
-        let history = history_for_paste.clone();
-        move |ev: web_sys::ClipboardEvent| {
+    let on_paste = move |ev: web_sys::ClipboardEvent| {
         // If internal node clipboard was used, keydown already handled it
         if node_clipboard.get_untracked().as_ref().is_some_and(|(n, _)| !n.is_empty()) {
             return;
@@ -1407,7 +1517,6 @@ pub fn App() -> impl IntoView {
         }
 
         let (world_x, world_y) = last_mouse_world_pos.get_untracked();
-        let history = history.clone();
 
         spawn_local(async move {
             let result = invoke("paste_image", JsValue::NULL).await;
@@ -1438,21 +1547,17 @@ pub fn App() -> impl IntoView {
                     };
                     let new_id = new_node.id.clone();
 
-                    // Record history before image paste
-                    history.borrow_mut().push(board.get_untracked());
-                    set_board.update(|b| {
-                        b.nodes.push(new_node);
-                    });
-                    set_selected_nodes.set([new_id].into_iter().collect());
-
-                    request_save.call();
+                    dispatch.apply(
+                        BoardAction::CreateNode(new_node),
+                        Some([new_id].into_iter().collect()),
+                    );
                 }
                 Err(e) => {
                     web_sys::console::error_1(&format!("Paste failed: {:?}", e).into());
                 }
             }
         });
-    }};
+    };
 
     let on_upload = move |_ev: web_sys::MouseEvent| {
         if let Some(input) = file_input_ref.get() {
@@ -1747,7 +1852,9 @@ mod tests {
     }
 
     mod cycle_node_type_tests {
-        use super::*;
+        // `cycle_node_type` moved to the reducer module (interaction.rs) as part of
+        // the P1.3 reducer extraction; this asserts the app's view of that behavior.
+        use crate::interaction::cycle_node_type;
 
         #[test]
         fn cycles_through_all_types() {

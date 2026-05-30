@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use crate::app::{BoardCtx, is_local_md_file, parse_markdown};
+use crate::interaction::BoardAction;
 
 #[component]
 pub fn MarkdownModal() -> impl IntoView {
@@ -53,14 +54,16 @@ pub fn MarkdownModal() -> impl IntoView {
                                                    font-family: inherit; font-size: 12px; font-weight: bold;"
                                             on:click=move |_| {
                                                 let new_content = ctx.md_edit_text.get_untracked();
-                                                let nid = node_id_save.clone();
-                                                ctx.set_board.update(|b| {
-                                                    if let Some(node) = b.nodes.iter_mut().find(|n| n.id == nid) {
-                                                        node.text = new_content;
-                                                    }
-                                                });
-
-                                                ctx.request_save.call();
+                                                // Dispatch through the reducer so the
+                                                // commit snapshots undo history
+                                                // (fixes undo dropping edits, F52/F109).
+                                                ctx.dispatch.apply(
+                                                    BoardAction::EditMarkdown {
+                                                        id: node_id_save.clone(),
+                                                        text: new_content,
+                                                    },
+                                                    None,
+                                                );
 
                                                 ctx.set_modal_md.set(Some((node_id_save.clone(), false)));
                                             }

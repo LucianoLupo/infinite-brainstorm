@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use crate::app::BoardCtx;
+use crate::interaction::BoardAction;
 
 #[component]
 pub fn NodeEditor() -> impl IntoView {
@@ -24,14 +25,15 @@ pub fn NodeEditor() -> impl IntoView {
                         if let Some(target) = ev.target() {
                             if let Ok(textarea) = target.dyn_into::<web_sys::HtmlTextAreaElement>() {
                                 let new_text = textarea.value();
-                                let node_id_clone = node_id_for_blur.clone();
-                                ctx.set_board.update(|b| {
-                                    if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
-                                        node.text = new_text;
-                                    }
-                                });
-
-                                ctx.request_save.call();
+                                // Dispatch through the reducer so the commit snapshots
+                                // undo history (fixes undo dropping typed text, F52/F109).
+                                ctx.dispatch.apply(
+                                    BoardAction::EditMarkdown {
+                                        id: node_id_for_blur.clone(),
+                                        text: new_text,
+                                    },
+                                    None,
+                                );
                             }
                         }
                         ctx.set_editing_node.set(None);
@@ -43,14 +45,13 @@ pub fn NodeEditor() -> impl IntoView {
                             if let Some(target) = ev.target() {
                                 if let Ok(textarea) = target.dyn_into::<web_sys::HtmlTextAreaElement>() {
                                     let new_text = textarea.value();
-                                    let node_id_clone = node_id_for_keydown.clone();
-                                    ctx.set_board.update(|b| {
-                                        if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
-                                            node.text = new_text;
-                                        }
-                                    });
-
-                                    ctx.request_save.call();
+                                    ctx.dispatch.apply(
+                                        BoardAction::EditMarkdown {
+                                            id: node_id_for_keydown.clone(),
+                                            text: new_text,
+                                        },
+                                        None,
+                                    );
                                 }
                             }
                             ctx.set_editing_node.set(None);
@@ -78,14 +79,15 @@ pub fn NodeEditor() -> impl IntoView {
                         if let Some(target) = ev.target() {
                             if let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() {
                                 let new_text = input.value();
-                                let node_id_clone = node_id_for_blur.clone();
-                                ctx.set_board.update(|b| {
-                                    if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
-                                        node.text = new_text;
-                                    }
-                                });
-
-                                ctx.request_save.call();
+                                // Dispatch through the reducer so the commit snapshots
+                                // undo history (fixes undo dropping typed text, F52/F109).
+                                ctx.dispatch.apply(
+                                    BoardAction::EditText {
+                                        id: node_id_for_blur.clone(),
+                                        text: new_text,
+                                    },
+                                    None,
+                                );
                             }
                         }
                         ctx.set_editing_node.set(None);
@@ -98,14 +100,13 @@ pub fn NodeEditor() -> impl IntoView {
                                 if let Some(target) = ev.target() {
                                     if let Ok(input) = target.dyn_into::<web_sys::HtmlInputElement>() {
                                         let new_text = input.value();
-                                        let node_id_clone = node_id_for_keydown.clone();
-                                        ctx.set_board.update(|b| {
-                                            if let Some(node) = b.nodes.iter_mut().find(|n| n.id == node_id_clone) {
-                                                node.text = new_text;
-                                            }
-                                        });
-
-                                        ctx.request_save.call();
+                                        ctx.dispatch.apply(
+                                            BoardAction::EditText {
+                                                id: node_id_for_keydown.clone(),
+                                                text: new_text,
+                                            },
+                                            None,
+                                        );
                                         ctx.set_editing_node.set(None);
                                     }
                                 }

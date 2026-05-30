@@ -50,6 +50,19 @@ serde-wasm-bindgen = "0.6"
 console_error_panic_hook = "0.1.7"
 gloo-timers = { version = "0.3", features = ["futures"] }
 uuid = { version = "1", features = ["v4", "js"] }
+brainstorm-types = { path = "crates/brainstorm-types" }
 
 [workspace]
-members = ["src-tauri"]
+members = ["src-tauri", "crates/brainstorm-types"]
+
+# Release profile is honored from the workspace ROOT manifest only (Cargo
+# ignores `[profile.*]` in member manifests). Optimize for a small, fast binary:
+# size-optimized codegen, full LTO, a single codegen unit, stripped symbols, and
+# abort-on-panic (smaller, no unwind tables). panic="abort" applies to the
+# release profile only — dev/test still unwind, so test harnesses keep working.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

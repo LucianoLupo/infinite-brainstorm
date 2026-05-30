@@ -1,118 +1,514 @@
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
+use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
-// Flag to skip file watcher emission after our own saves
-static SKIP_NEXT_EMIT: AtomicBool = AtomicBool::new(false);
+/// Hash of the exact bytes the app last wrote to `board.json` via
+/// `write_board_atomic`. The file watcher compares the on-disk content hash
+/// against this value: when they match, the change originated from our own save
+/// and we must NOT emit (re-emitting would reload our own write in a loop). An
+/// external edit produces a different hash and always emits.
+///
+/// This replaces the prior single-shot `SKIP_NEXT_EMIT` bool, which could only
+/// suppress ONE notify event per save — a single atomic rename can fan out into
+/// several events, and the surplus would leak through and trigger a self-reload.
+/// A content hash suppresses the self-write no matter how many events fire,
+/// while still letting a genuine external edit through immediately (F49/F93).
+static LAST_SELF_WRITE_HASH: Mutex<Option<u64>> = Mutex::new(None);
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct Board {
-    pub nodes: Vec<Node>,
-    pub edges: Vec<Edge>,
+/// Hash `content` with the std default hasher. Used both at save time (to record
+/// what we wrote) and in the watcher (to fingerprint the on-disk bytes).
+fn content_hash(content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Node {
-    pub id: String,
-    pub x: f64,
-    pub y: f64,
-    #[serde(default)]
-    pub width: f64,
-    #[serde(default)]
-    pub height: f64,
-    pub text: String,
-    #[serde(default = "default_node_type")]
-    pub node_type: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub priority: Option<u8>,
+pub use brainstorm_types::{
+    Board, Edge, LinkPreview, Node, NodeType, ValidationError, CURRENT_BOARD_VERSION,
+};
+
+/// Outcome of validating a board file's raw text: the structural errors from
+/// [`Board::validate`] plus any unrecognized top-level keys (forward-compat
+/// warnings). Returned by [`validate_board_text`] so the CLI can print both and
+/// pick an exit code. A board is "clean" when both lists are empty.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidationReport {
+    pub errors: Vec<ValidationError>,
+    pub unknown_keys: Vec<String>,
 }
 
-fn default_node_type() -> String {
-    "text".to_string()
-}
+impl ValidationReport {
+    /// True when the board has no *fatal* structural errors. Forward-compat
+    /// findings — unknown top-level keys and a future schema version
+    /// ([`ValidationError::is_warning`]) — are warnings, not failures, so they do
+    /// NOT make the report unclean.
+    pub fn is_clean(&self) -> bool {
+        !self.errors.iter().any(|e| !e.is_warning())
+    }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Edge {
-    pub id: String,
-    pub from_node: String,
-    pub to_node: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-}
+    /// The fatal (non-warning) errors only — what makes `validate` exit non-zero.
+    pub fn fatal_errors(&self) -> impl Iterator<Item = &ValidationError> {
+        self.errors.iter().filter(|e| !e.is_warning())
+    }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct LinkPreview {
-    pub url: String,
-    pub title: Option<String>,
-    pub description: Option<String>,
-    pub image: Option<String>,
-    pub site_name: Option<String>,
-}
-
-fn get_board_path(_app: &AppHandle) -> PathBuf {
-    // Use parent of src-tauri (project root) during dev, or current dir in production
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
-    // If we're in src-tauri, go up one level to project root
-    if cwd.ends_with("src-tauri") {
-        cwd.parent().unwrap_or(&cwd).join("board.json")
-    } else {
-        cwd.join("board.json")
+    /// The non-fatal warnings from validation (e.g. a future schema version).
+    pub fn warnings(&self) -> impl Iterator<Item = &ValidationError> {
+        self.errors.iter().filter(|e| e.is_warning())
     }
 }
 
-#[tauri::command]
-fn load_board(app: AppHandle) -> Result<Board, String> {
-    let path = get_board_path(&app);
+/// Return the top-level object keys that are not part of the known board schema
+/// (`version`, `nodes`, `edges`). Serde silently ignores extra keys at
+/// deserialize time; this lets the validator *warn* about them so a typo'd or
+/// future key is visible rather than swallowed. Non-object JSON yields an empty
+/// list (the structural parse error is surfaced elsewhere). Pure + testable.
+pub fn unknown_top_level_keys(raw: &str) -> Vec<String> {
+    const KNOWN: [&str; 3] = ["version", "nodes", "edges"];
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(serde_json::Value::Object(map)) => map
+            .keys()
+            .filter(|k| !KNOWN.contains(&k.as_str()))
+            .cloned()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
 
-    // If file doesn't exist, return empty board (don't create file until user saves)
+/// Validate a board from its raw JSON text. Parses the board, runs
+/// [`Board::validate`], and additionally flags unknown top-level keys. Returns
+/// `Err` only when the text fails to parse as a board at all (the caller turns
+/// that into a non-zero exit). Pure (no IO) so it is unit-tested directly.
+pub fn validate_board_text(raw: &str) -> Result<ValidationReport, String> {
+    let board: Board = serde_json::from_str(raw).map_err(|e| format!("invalid board JSON: {e}"))?;
+    Ok(ValidationReport {
+        errors: board.validate(),
+        unknown_keys: unknown_top_level_keys(raw),
+    })
+}
+
+/// Evaluate a small read-only query expression against a board and return a
+/// human-readable result. Pure + testable; powers `brainstorm query <expr>`.
+///
+/// Supported expressions:
+/// - `count`                  — node and edge counts
+/// - `nodes`                  — every node id + type + first line of text
+/// - `edges`                  — every edge id + `from -> to` (+ label)
+/// - `node:<id>`              — full detail for one node (errors if missing)
+/// - `type:<node_type>`       — node ids whose `node_type` matches
+/// - `tag:<tag>`              — node ids carrying `<tag>`
+/// - `status:<status>`        — node ids whose `status` matches
+/// - `group:<group>`          — node ids in `<group>`
+/// - `priority:<n>`           — node ids with priority `<n>`
+///
+/// An unrecognized expression returns `Err` with the list of supported forms.
+pub fn query_board(board: &Board, expr: &str) -> Result<String, String> {
+    let expr = expr.trim();
+
+    // Short, single-line summary of a node for list output.
+    let node_summary = |n: &Node| -> String {
+        let first_line = n.text.lines().next().unwrap_or("").trim();
+        format!("{}  [{}]  {}", n.id, n.node_type.as_str(), first_line)
+    };
+
+    // Helper: render a filtered list of node ids, or a "no matches" line.
+    let render_ids = |label: &str, ids: Vec<String>| -> String {
+        if ids.is_empty() {
+            format!("no nodes match {label}")
+        } else {
+            format!("{} node(s):\n{}", ids.len(), ids.join("\n"))
+        }
+    };
+
+    if let Some((key, value)) = expr.split_once(':') {
+        let value = value.trim();
+        return match key.trim() {
+            "node" => board
+                .nodes
+                .iter()
+                .find(|n| n.id == value)
+                .map(|n| {
+                    let mut out = format!(
+                        "id: {}\ntype: {}\npos: ({}, {})\nsize: {} x {}\ntext: {}",
+                        n.id,
+                        n.node_type.as_str(),
+                        n.x,
+                        n.y,
+                        n.width,
+                        n.height,
+                        n.text
+                    );
+                    if let Some(c) = &n.color {
+                        out.push_str(&format!("\ncolor: {c}"));
+                    }
+                    if !n.tags.is_empty() {
+                        out.push_str(&format!("\ntags: {}", n.tags.join(", ")));
+                    }
+                    if let Some(s) = &n.status {
+                        out.push_str(&format!("\nstatus: {s}"));
+                    }
+                    if let Some(g) = &n.group {
+                        out.push_str(&format!("\ngroup: {g}"));
+                    }
+                    if let Some(p) = n.priority {
+                        out.push_str(&format!("\npriority: {p}"));
+                    }
+                    out
+                })
+                .ok_or_else(|| format!("no node with id '{value}'")),
+            "type" => Ok(render_ids(
+                &format!("type:{value}"),
+                board
+                    .nodes
+                    .iter()
+                    .filter(|n| n.node_type.as_str() == value)
+                    .map(|n| n.id.clone())
+                    .collect(),
+            )),
+            "tag" => Ok(render_ids(
+                &format!("tag:{value}"),
+                board
+                    .nodes
+                    .iter()
+                    .filter(|n| n.tags.iter().any(|t| t == value))
+                    .map(|n| n.id.clone())
+                    .collect(),
+            )),
+            "status" => Ok(render_ids(
+                &format!("status:{value}"),
+                board
+                    .nodes
+                    .iter()
+                    .filter(|n| n.status.as_deref() == Some(value))
+                    .map(|n| n.id.clone())
+                    .collect(),
+            )),
+            "group" => Ok(render_ids(
+                &format!("group:{value}"),
+                board
+                    .nodes
+                    .iter()
+                    .filter(|n| n.group.as_deref() == Some(value))
+                    .map(|n| n.id.clone())
+                    .collect(),
+            )),
+            "priority" => {
+                let p: u8 = value
+                    .parse()
+                    .map_err(|_| format!("priority must be a number, got '{value}'"))?;
+                Ok(render_ids(
+                    &format!("priority:{p}"),
+                    board
+                        .nodes
+                        .iter()
+                        .filter(|n| n.priority == Some(p))
+                        .map(|n| n.id.clone())
+                        .collect(),
+                ))
+            }
+            other => Err(query_usage(other)),
+        };
+    }
+
+    match expr {
+        "count" => Ok(format!(
+            "{} node(s), {} edge(s)",
+            board.nodes.len(),
+            board.edges.len()
+        )),
+        "nodes" => {
+            if board.nodes.is_empty() {
+                Ok("0 nodes".to_string())
+            } else {
+                Ok(board
+                    .nodes
+                    .iter()
+                    .map(node_summary)
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+        }
+        "edges" => {
+            if board.edges.is_empty() {
+                Ok("0 edges".to_string())
+            } else {
+                Ok(board
+                    .edges
+                    .iter()
+                    .map(|e| match &e.label {
+                        Some(l) => format!("{}: {} -> {} ({})", e.id, e.from_node, e.to_node, l),
+                        None => format!("{}: {} -> {}", e.id, e.from_node, e.to_node),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+        }
+        other => Err(query_usage(other)),
+    }
+}
+
+/// Build the "unsupported query" error message listing every accepted form.
+fn query_usage(got: &str) -> String {
+    format!(
+        "unsupported query '{got}'. Supported: count | nodes | edges | node:<id> | \
+type:<node_type> | tag:<tag> | status:<status> | group:<group> | priority:<n>"
+    )
+}
+
+/// Resolve the path to the active `board.json`, anchored on the process's
+/// current working directory.
+///
+/// We deliberately hard-error if `current_dir()` fails instead of silently
+/// falling back to `"."`: a relative `"."` would resolve against whatever
+/// directory the process happens to be in, which (when cwd is unavailable) is
+/// undefined — risking reads/writes of the wrong board, or scoping checks
+/// against the wrong root. A clear error is safer than a silent wrong path.
+///
+/// Takes no `AppHandle`: the path is derived purely from the cwd, so the handle
+/// was unused. Callers that need it for a Tauri command propagate the `Err` to
+/// the frontend; setup-time callers log and degrade.
+fn get_board_path() -> Result<PathBuf, String> {
+    // Use parent of src-tauri (project root) during dev, or current dir in production
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("Cannot determine current directory: {e}"))?;
+
+    // If we're in src-tauri, go up one level to project root
+    let path = if cwd.ends_with("src-tauri") {
+        cwd.parent().unwrap_or(&cwd).join("board.json")
+    } else {
+        cwd.join("board.json")
+    };
+    Ok(path)
+}
+
+/// Public resolver for the active `board.json` path, used by the CLI
+/// (`brainstorm validate`/`query` with no explicit path argument). Delegates to
+/// the same cwd-anchored logic the Tauri commands use so the CLI and GUI agree
+/// on which board file is "the" board.
+pub fn default_board_path() -> Result<PathBuf, String> {
+    get_board_path()
+}
+
+/// Pure IO core for loading a board from a concrete path. Kept free of
+/// `AppHandle` so it is directly unit/integration testable (see
+/// `tests/board_roundtrip.rs`).
+///
+/// - A missing file yields an empty `Board` (we don't create the file until the
+///   user saves), mirroring the `load_board` command's behavior.
+/// - Malformed JSON returns `Err` rather than silently swallowing it into an
+///   empty board (see P0.1 / F73).
+pub fn load_board_at(path: &std::path::Path) -> Result<Board, String> {
     if !path.exists() {
         return Ok(Board::default());
     }
 
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let board: Board = serde_json::from_str(&content).map_err(|e| e.to_string())?;
     Ok(board)
 }
 
 #[tauri::command]
-fn save_board(app: AppHandle, board: Board) -> Result<(), String> {
-    let path = get_board_path(&app);
+fn load_board() -> Result<Board, String> {
+    let path = get_board_path()?;
+    load_board_at(&path)
+}
+
+/// Atomically write a board to `path`.
+///
+/// Strategy: serialize JSON, write it to a sibling temp file (`<path>.tmp`) in
+/// the SAME directory, `fsync` it, then `rename` it over `path`. Because rename
+/// is atomic on the same filesystem, readers (and the file watcher) never
+/// observe a partially-written file. Before the rename, the prior on-disk
+/// contents are copied to `<path>.bak` (best-effort). The hash of the bytes we
+/// are about to commit is recorded in `LAST_SELF_WRITE_HASH` immediately before
+/// the rename — the atomic commit point — so the file watcher can recognize the
+/// resulting change as our own (by matching the on-disk content hash) and skip
+/// re-emitting it, no matter how many notify events the rename fans out into.
+pub fn write_board_atomic(path: &std::path::Path, board: &Board) -> Result<(), String> {
+    use std::io::Write;
 
     // Create parent directory if needed (only on actual save, not on load)
     if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            let _ = fs::create_dir_all(parent);
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
     }
 
-    // Set flag to skip file watcher emission for our own save
-    SKIP_NEXT_EMIT.store(true, Ordering::SeqCst);
+    // Compact (single-line) JSON: board.json is primarily machine-read by agents,
+    // so we drop pretty-printing to keep writes small and fast.
+    let json = serde_json::to_string(board).map_err(|e| e.to_string())?;
 
-    let json = serde_json::to_string_pretty(&board).map_err(|e| e.to_string())?;
-    fs::write(&path, json).map_err(|e| e.to_string())?;
+    // Write the serialized JSON to a sibling temp file in the same directory.
+    let tmp_path = {
+        let mut name = path
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
+        name.push(".tmp");
+        path.with_file_name(name)
+    };
+
+    {
+        let mut file = fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+        file.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
+        // fsync: flush the temp file's contents to disk before the rename so a
+        // crash mid-write can't leave a truncated file at the final path.
+        file.sync_all().map_err(|e| e.to_string())?;
+    }
+
+    // Best-effort backup of the prior on-disk contents. Ignore failures (e.g.
+    // no prior file yet, or a permissions hiccup) — the backup is advisory.
+    if path.exists() {
+        let bak_path = {
+            let mut name = path
+                .file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_default();
+            name.push(".bak");
+            path.with_file_name(name)
+        };
+        let _ = fs::copy(path, &bak_path);
+    }
+
+    // Record the hash of the bytes we are committing at the atomic commit point
+    // — immediately before rename. The watcher matches the on-disk content hash
+    // against this to recognize (and skip) our own write. Snapshot the prior
+    // value so we can restore it if the rename fails.
+    let new_hash = content_hash(&json);
+    let prior_hash = {
+        let mut guard = LAST_SELF_WRITE_HASH
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        guard.replace(new_hash)
+    };
+
+    fs::rename(&tmp_path, path).map_err(|e| {
+        // The rename failed, so we never actually committed — restore the prior
+        // self-write hash and clean up the temp file so we don't leave litter.
+        *LAST_SELF_WRITE_HASH
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = prior_hash;
+        let _ = fs::remove_file(&tmp_path);
+        e.to_string()
+    })?;
+
     Ok(())
 }
 
 #[tauri::command]
-fn get_board_path_cmd(app: AppHandle) -> Result<String, String> {
-    let path = get_board_path(&app);
+fn save_board(board: Board) -> Result<(), String> {
+    let path = get_board_path()?;
+    write_board_atomic(&path, &board)
+}
+
+#[tauri::command]
+fn get_board_path_cmd() -> Result<String, String> {
+    let path = get_board_path()?;
     Ok(path.to_string_lossy().to_string())
+}
+
+/// Maximum number of redirect hops we will follow before giving up. Each hop is
+/// independently re-resolved and re-checked against the IP policy, so this is a
+/// hard bound on the redirect chain a malicious server can drive us through.
+const MAX_REDIRECTS: usize = 3;
+
+/// Maximum HTML body size we will buffer before parsing. A crafted (or
+/// compromised) server could otherwise stream gigabytes and OOM the process.
+const MAX_PREVIEW_BODY_BYTES: usize = 2 * 1024 * 1024; // 2 MB
+
+/// Return `true` if `addr` points at a host we must never issue a server-side
+/// request to: loopback, link-local, RFC1918 private ranges, CGNAT (100.64/10),
+/// or IPv6 ULA (fc00::/7). Enforced at the *resolved IP* level (not the
+/// hostname) so it is robust against DNS rebinding and obfuscated literals.
+///
+/// Pure function — unit-tested directly.
+fn is_blocked_ip(addr: IpAddr) -> bool {
+    match addr {
+        IpAddr::V4(v4) => is_blocked_ipv4(v4),
+        IpAddr::V6(v6) => {
+            // Normalize IPv4-mapped (::ffff:a.b.c.d) addresses to their v4 form
+            // and apply the v4 policy, so an attacker can't tunnel 127.0.0.1
+            // through [::ffff:127.0.0.1]. We deliberately do NOT use
+            // `to_ipv4()`, which also matches deprecated IPv4-*compatible*
+            // addresses (e.g. `::1` -> `0.0.0.1`) and would mis-route the IPv6
+            // loopback away from the v6 check below.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_blocked_ipv4(v4);
+            }
+            is_blocked_ipv6(v6)
+        }
+    }
+}
+
+fn is_blocked_ipv4(v4: Ipv4Addr) -> bool {
+    let o = v4.octets();
+    v4.is_loopback()              // 127.0.0.0/8
+        || v4.is_link_local()     // 169.254.0.0/16
+        || v4.is_private()        // 10/8, 172.16/12, 192.168/16
+        || v4.is_unspecified()    // 0.0.0.0
+        || v4.is_broadcast()      // 255.255.255.255
+        || (o[0] == 100 && (o[1] & 0xc0) == 0x40) // 100.64.0.0/10 (CGNAT)
+}
+
+fn is_blocked_ipv6(v6: Ipv6Addr) -> bool {
+    v6.is_loopback()              // ::1
+        || v6.is_unspecified()    // ::
+        || (v6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10 (link-local)
+        || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7  (ULA)
+}
+
+/// Resolve `host:port` and reject if any resolved address is blocked. Returns
+/// `Ok(())` only when the host resolves to at least one address and *every*
+/// resolved address is publicly routable. We reject if ANY address is blocked,
+/// so a hostname with mixed public/private records can't be used to slip past
+/// the check via record ordering.
+fn check_host_allowed(host: &str, port: u16) -> Result<(), String> {
+    // A bare IP literal still goes through ToSocketAddrs, which parses it
+    // without a DNS round-trip — covers decimal/hex/mapped literals once parsed.
+    let addrs: Vec<_> = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("Failed to resolve host: {}", e))?
+        .collect();
+
+    if addrs.is_empty() {
+        return Err("Host did not resolve to any address".to_string());
+    }
+
+    for sa in &addrs {
+        if is_blocked_ip(sa.ip()) {
+            return Err(format!(
+                "Refusing to fetch internal/private address ({})",
+                sa.ip()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate the host of a parsed URL against the IP policy. Extracts the host
+/// and effective port, then defers to `check_host_allowed`. Decimal/hex/mapped
+/// literal hosts are normalized by `Url`/`ToSocketAddrs` parsing before the
+/// check, so `http://2130706433/` and `http://[::ffff:127.0.0.1]/` are rejected.
+fn validate_url_host(parsed: &reqwest::Url) -> Result<(), String> {
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "URL has no host".to_string())?;
+    // Strip brackets from IPv6 literals so ToSocketAddrs parses them.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| "URL has no port".to_string())?;
+    check_host_allowed(host, port)
 }
 
 #[tauri::command]
@@ -130,12 +526,68 @@ async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
+        // Disable reqwest's automatic redirect handling: we follow redirects
+        // manually so we can re-resolve and re-validate every hop's host
+        // against the IP policy (DNS-rebinding-safe). The hop count is capped
+        // by MAX_REDIRECTS.
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
         .build()
         .map_err(|e| e.to_string())?;
 
-    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
-    let html = response.text().await.map_err(|e| e.to_string())?;
+    let mut current_url = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
+    let mut response;
+    let mut hops = 0usize;
+
+    loop {
+        // Re-validate the host on every hop, including the initial request, so
+        // a redirect to an internal address (or a rebind between resolution and
+        // connection) is rejected before any request leaves the machine.
+        validate_url_host(&current_url)?;
+
+        response = client
+            .get(current_url.clone())
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if response.status().is_redirection() {
+            if hops >= MAX_REDIRECTS {
+                return Err("Too many redirects".to_string());
+            }
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| "Redirect without Location header".to_string())?;
+            // Resolve the (possibly relative) Location against the current URL.
+            current_url = current_url
+                .join(location)
+                .map_err(|e| format!("Invalid redirect target: {}", e))?;
+            // Only http(s) redirects are followed; reject scheme downgrades to
+            // file://, data://, etc.
+            if current_url.scheme() != "http" && current_url.scheme() != "https" {
+                return Err("Refusing to follow non-http redirect".to_string());
+            }
+            hops += 1;
+            continue;
+        }
+
+        break;
+    }
+
+    // Stream the body with a running byte cap so a huge response cannot OOM the
+    // process before we parse it.
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if buf.len() + chunk.len() > MAX_PREVIEW_BODY_BYTES {
+            let remaining = MAX_PREVIEW_BODY_BYTES - buf.len();
+            buf.extend_from_slice(&chunk[..remaining]);
+            break;
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    let html = String::from_utf8_lossy(&buf).into_owned();
     let document = Html::parse_document(&html);
 
     // Selectors for Open Graph and fallback meta tags
@@ -164,13 +616,11 @@ async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
 
     let mut image = get_content(og_image).or_else(|| get_content(twitter_image));
 
-    // Make relative image URLs absolute
+    // Make relative image URLs absolute against the final (post-redirect) URL.
     if let Some(ref img) = image {
         if img.starts_with('/') {
-            if let Ok(base) = reqwest::Url::parse(&url) {
-                if let Ok(absolute) = base.join(img) {
-                    image = Some(absolute.to_string());
-                }
+            if let Ok(absolute) = current_url.join(img) {
+                image = Some(absolute.to_string());
             }
         }
     }
@@ -186,16 +636,107 @@ async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
     })
 }
 
-fn get_assets_dir(app: &AppHandle) -> PathBuf {
-    let board_path = get_board_path(app);
-    let parent = board_path.parent().unwrap_or(&board_path);
-    parent.join("assets")
+fn get_assets_dir() -> Result<PathBuf, String> {
+    let board_path = get_board_path()?;
+    let parent = board_path.parent().unwrap_or(&board_path).to_path_buf();
+    Ok(parent.join("assets"))
 }
 
-fn ensure_assets_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let assets_dir = get_assets_dir(app);
+/// Maximum byte size for an image we will base64-encode and hand to the
+/// webview. Guards against memory exhaustion / DoS via a crafted board.json
+/// pointing at a huge file.
+const MAX_IMAGE_BYTES: u64 = 25 * 1024 * 1024; // 25 MB
+
+/// Expand `~`, strip a `file://` prefix, and URL-decode an input path string
+/// into a concrete filesystem path. Shared by the file-reading commands so
+/// their accepted path syntax stays consistent.
+fn expand_path(path: &str) -> PathBuf {
+    let expanded = if let Some(rest) = path.strip_prefix('~') {
+        match dirs::home_dir() {
+            Some(home) => home
+                .join(rest.trim_start_matches('/'))
+                .to_string_lossy()
+                .into_owned(),
+            None => path.to_string(),
+        }
+    } else if let Some(stripped) = path.strip_prefix("file://") {
+        urlencoding::decode(stripped)
+            .map(|s| s.into_owned())
+            .unwrap_or_else(|_| stripped.to_string())
+    } else {
+        path.to_string()
+    };
+    PathBuf::from(expanded)
+}
+
+/// Resolve `input` to a canonical path and reject it unless it lives inside one
+/// of `allowed_roots`. Canonicalization (which also resolves `..` and symlinks)
+/// is what stops path-traversal exfiltration: a crafted board.json pointing at
+/// `/etc/passwd`, `~/.ssh/id_rsa`, or `<board-dir>/../../secret` resolves to a
+/// path that does not start with any allowed root, so we return `Err`.
+fn scope_path(input: &str, allowed_roots: &[PathBuf]) -> Result<PathBuf, String> {
+    let expanded = expand_path(input);
+
+    let canonical = expanded
+        .canonicalize()
+        .map_err(|_| format!("File not found: {}", expanded.display()))?;
+
+    let in_scope = allowed_roots.iter().any(|root| {
+        root.canonicalize()
+            .map(|r| canonical.starts_with(&r))
+            .unwrap_or(false)
+    });
+
+    if !in_scope {
+        return Err("Access denied: path is outside the allowed directories".to_string());
+    }
+
+    Ok(canonical)
+}
+
+/// The directory that holds the active `board.json`. Local images and assets
+/// referenced by the board are scoped to live inside this directory.
+fn board_dir() -> Result<PathBuf, String> {
+    let board_path = get_board_path()?;
+    Ok(board_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".")))
+}
+
+/// Sniff the leading magic bytes of `data` and return the matching image MIME
+/// type, or `None` if the content is not a supported image format. We trust the
+/// file *content*, not its extension — a crafted board.json can rename
+/// `/etc/passwd` to `evil.png`, but its bytes won't match any signature here.
+fn sniff_image_mime(data: &[u8]) -> Option<&'static str> {
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Some("image/png");
+    }
+    // JPEG: FF D8 FF
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    // GIF: "GIF87a" or "GIF89a"
+    if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    // WebP: "RIFF" .... "WEBP"
+    if data.len() >= 12 && data.starts_with(b"RIFF") && &data[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    // BMP: "BM"
+    if data.starts_with(b"BM") {
+        return Some("image/bmp");
+    }
+    None
+}
+
+fn ensure_assets_dir() -> Result<PathBuf, String> {
+    let assets_dir = get_assets_dir()?;
     if !assets_dir.exists() {
-        fs::create_dir_all(&assets_dir).map_err(|e| format!("Failed to create assets dir: {}", e))?;
+        fs::create_dir_all(&assets_dir)
+            .map_err(|e| format!("Failed to create assets dir: {}", e))?;
     }
     Ok(assets_dir)
 }
@@ -207,79 +748,96 @@ pub struct PasteImageResult {
     pub height: u32,
 }
 
-#[tauri::command]
-fn read_image_base64(path: String) -> Result<String, String> {
-    let path = PathBuf::from(&path);
+/// Validate, read, and base64-encode an image. Pure (no AppHandle) so it can be
+/// unit-tested: the caller passes the directories the path is allowed to live in.
+fn read_image_base64_scoped(path: &str, allowed_roots: &[PathBuf]) -> Result<String, String> {
+    // Reject any path that resolves outside the allowed roots (path traversal,
+    // absolute paths to system files, etc.).
+    let canonical = scope_path(path, allowed_roots)?;
 
-    if !path.exists() {
-        return Err(format!("File not found: {}", path.display()));
+    // Cap file size BEFORE reading the bytes into memory.
+    let meta = fs::metadata(&canonical).map_err(|e| format!("Failed to stat file: {}", e))?;
+    if meta.len() > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "Image too large: {} bytes (max {} bytes)",
+            meta.len(),
+            MAX_IMAGE_BYTES
+        ));
     }
 
-    let data = fs::read(&path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let data = fs::read(&canonical).map_err(|e| format!("Failed to read file: {}", e))?;
 
-    // Detect MIME type from extension
-    let ext = path.extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png")
-        .to_lowercase();
+    // Derive MIME from detected magic bytes, not the file extension. Reject any
+    // file whose content is not a supported image format.
+    let mime = sniff_image_mime(&data)
+        .ok_or_else(|| "Unsupported or non-image file content".to_string())?;
 
-    let mime = match ext.as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        _ => "image/png",
-    };
-
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     let b64 = STANDARD.encode(&data);
 
     Ok(format!("data:{};base64,{}", mime, b64))
 }
 
 #[tauri::command]
-fn read_markdown_file(path: String) -> Result<String, String> {
-    // Expand ~ to home directory, strip file:// prefix, and URL-decode
-    let expanded = if path.starts_with('~') {
-        dirs::home_dir()
-            .map(|h| path.replacen('~', &h.to_string_lossy(), 1))
-            .unwrap_or(path)
-    } else if path.starts_with("file://") {
-        let stripped = path.strip_prefix("file://").unwrap_or(&path);
-        // URL-decode the path (handles %20 for spaces, etc.)
-        urlencoding::decode(stripped)
-            .map(|s| s.into_owned())
-            .unwrap_or_else(|_| stripped.to_string())
-    } else {
-        path
-    };
+fn read_image_base64(path: String) -> Result<String, String> {
+    read_image_base64_scoped(&path, &[board_dir()?])
+}
 
-    std::fs::read_to_string(&expanded)
-        .map_err(|e| format!("Failed to read {}: {}", expanded, e))
+/// Validate and read a local Markdown file. Pure (no AppHandle) so it can be
+/// unit-tested. Only `.md` files inside an allowed root are readable — this both
+/// preserves the Obsidian-vault integration (vault files live under `$HOME`) and
+/// blocks exfiltration of non-Markdown system files like `/etc/passwd` or
+/// `~/.ssh/id_rsa`.
+fn read_markdown_file_scoped(path: &str, allowed_roots: &[PathBuf]) -> Result<String, String> {
+    let canonical = scope_path(path, allowed_roots)?;
+
+    let is_md = canonical
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+        .unwrap_or(false);
+    if !is_md {
+        return Err("Access denied: only .md files can be read".to_string());
+    }
+
+    std::fs::read_to_string(&canonical)
+        .map_err(|e| format!("Failed to read {}: {}", canonical.display(), e))
 }
 
 #[tauri::command]
-fn delete_asset(_app: AppHandle, path: String) -> Result<(), String> {
+fn read_markdown_file(path: String) -> Result<String, String> {
+    let mut roots = vec![board_dir()?];
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home);
+    }
+    read_markdown_file_scoped(&path, &roots)
+}
+
+#[tauri::command]
+fn delete_asset(path: String) -> Result<(), String> {
     let file_path = PathBuf::from(&path);
 
-    // Only allow deleting files in the assets folder (safety check)
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let assets_dir = cwd.join("assets");
+    // Only allow deleting files in the assets folder (safety check). Derive the
+    // assets dir from the SAME source paste_image writes to (get_assets_dir,
+    // anchored on the board.json directory) rather than re-deriving from cwd.join
+    // ("assets"): the two could diverge (e.g. running from src-tauri resolves the
+    // board to the project root) and a cwd-anchored check would wrongly reject —
+    // or, worse, wrongly accept — a delete.
+    let assets_dir = get_assets_dir()?;
 
     // Canonicalize paths to prevent path traversal attacks
-    let canonical_file = file_path.canonicalize()
+    let canonical_file = file_path
+        .canonicalize()
         .map_err(|_| "File not found".to_string())?;
-    let canonical_assets = assets_dir.canonicalize()
+    let canonical_assets = assets_dir
+        .canonicalize()
         .map_err(|_| "Assets folder not found".to_string())?;
 
     if !canonical_file.starts_with(&canonical_assets) {
         return Err("Can only delete files from assets folder".to_string());
     }
 
-    fs::remove_file(&canonical_file)
-        .map_err(|e| format!("Failed to delete file: {}", e))?;
+    fs::remove_file(&canonical_file).map_err(|e| format!("Failed to delete file: {}", e))?;
 
     Ok(())
 }
@@ -295,16 +853,18 @@ fn paste_image(app: AppHandle) -> Result<PasteImageResult, String> {
         let rgba_data = tauri_image.rgba();
 
         // Convert RGBA to PNG using image crate
-        let img_buffer: image::RgbaImage = image::ImageBuffer::from_raw(width, height, rgba_data.to_vec())
-            .ok_or_else(|| "Failed to create image buffer".to_string())?;
+        let img_buffer: image::RgbaImage =
+            image::ImageBuffer::from_raw(width, height, rgba_data.to_vec())
+                .ok_or_else(|| "Failed to create image buffer".to_string())?;
 
         // Generate unique filename
         let filename = format!("{}.png", uuid::Uuid::new_v4());
-        let assets_dir = ensure_assets_dir(&app)?;
+        let assets_dir = ensure_assets_dir()?;
         let dest_path = assets_dir.join(&filename);
 
         // Save as PNG
-        img_buffer.save_with_format(&dest_path, image::ImageFormat::Png)
+        img_buffer
+            .save_with_format(&dest_path, image::ImageFormat::Png)
             .map_err(|e| format!("Failed to save image: {}", e))?;
 
         return Ok(PasteImageResult {
@@ -321,15 +881,15 @@ fn paste_image(app: AppHandle) -> Result<PasteImageResult, String> {
         // Check if it's a file path to an image
         let path = PathBuf::from(text);
         if path.exists() && path.is_file() {
-            let ext = path.extension()
+            let ext = path
+                .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_lowercase();
 
             if ["png", "jpg", "jpeg", "gif", "webp", "bmp"].contains(&ext.as_str()) {
                 // Read and decode to get dimensions
-                let data = fs::read(&path)
-                    .map_err(|e| format!("Failed to read file: {}", e))?;
+                let data = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
                 let img = image::load_from_memory(&data)
                     .map_err(|e| format!("Failed to decode image: {}", e))?;
 
@@ -338,7 +898,7 @@ fn paste_image(app: AppHandle) -> Result<PasteImageResult, String> {
 
                 // Copy to assets folder
                 let filename = format!("{}.png", uuid::Uuid::new_v4());
-                let assets_dir = ensure_assets_dir(&app)?;
+                let assets_dir = ensure_assets_dir()?;
                 let dest_path = assets_dir.join(&filename);
 
                 // Save as PNG to normalize format
@@ -357,69 +917,199 @@ fn paste_image(app: AppHandle) -> Result<PasteImageResult, String> {
     Err("No image found in clipboard".to_string())
 }
 
+/// Pure decision core for the file watcher: given a `board.json` change event,
+/// decide whether to emit a `board-changed` notification to the frontend.
+///
+/// Two rules, in order:
+/// 1. **Skip-our-own-save**: if `skip` is set, the on-disk content matched the
+///    bytes we last wrote ourselves (see [`is_self_write`] /
+///    `LAST_SELF_WRITE_HASH`), so the change originated from us — never emit, or
+///    the frontend reloads its own write in a loop. Unlike the old single-shot
+///    flag, hash matching suppresses *every* notify event a single save fans out
+///    into, while an external edit (different hash) always passes through.
+/// 2. **Debounce**: a single save can produce several filesystem events. We only
+///    emit if at least `debounce` has elapsed since `last_emit` (or there was no
+///    prior emit). `now == last_emit + debounce` exactly is treated as elapsed.
+///
+/// Pure (no globals, no `AppHandle`, no clock) so it is unit-tested directly in
+/// `tests/watcher.rs`.
+pub fn should_emit_change(
+    skip: bool,
+    last_emit: Option<std::time::Instant>,
+    now: std::time::Instant,
+    debounce: Duration,
+) -> bool {
+    if skip {
+        return false;
+    }
+    match last_emit {
+        Some(t) => now.duration_since(t) >= debounce,
+        None => true,
+    }
+}
+
+/// Pure decision: is this on-disk change our own save?
+///
+/// `disk_hash` is [`content_hash`] of the bytes currently on disk; `last_self`
+/// is the hash recorded by the most recent [`write_board_atomic`] (or `None` if
+/// the app has not saved yet). Returns `true` only when both are present and
+/// equal — i.e. the file on disk is exactly what we last wrote, so the watcher
+/// should treat the event as a self-write and skip emitting.
+///
+/// An external edit changes the bytes (different hash) and yields `false`, so it
+/// always reloads. Kept separate from `should_emit_change` so the hash-matching
+/// rule is independently unit-tested (external write -> emit, self write -> no
+/// emit).
+pub fn is_self_write(disk_hash: u64, last_self: Option<u64>) -> bool {
+    last_self == Some(disk_hash)
+}
+
+/// Build a `notify` watcher on the parent directory of `board_path`. Returns the
+/// watcher (kept alive by the caller so the channel stays open) and the receiver.
+/// Any failure is surfaced as `Err(String)` rather than panicking, so the caller
+/// can log it, warn the UI, and retry instead of taking down the watcher thread.
+fn build_watcher(
+    board_path: &std::path::Path,
+) -> Result<
+    (
+        RecommendedWatcher,
+        std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
+    ),
+    String,
+> {
+    let (tx, rx) = channel();
+
+    let mut watcher: RecommendedWatcher = Watcher::new(
+        tx,
+        Config::default().with_poll_interval(Duration::from_millis(500)),
+    )
+    .map_err(|e| format!("Failed to create watcher: {e}"))?;
+
+    if let Some(parent) = board_path.parent() {
+        watcher
+            .watch(parent, RecursiveMode::NonRecursive)
+            .map_err(|e| format!("Failed to watch directory {}: {e}", parent.display()))?;
+    }
+
+    Ok((watcher, rx))
+}
+
+/// How long to wait before re-establishing the watch after it goes down (either
+/// the initial setup failed or the receiver channel broke).
+const WATCHER_RETRY_DELAY: Duration = Duration::from_secs(2);
+
 fn setup_file_watcher(app: AppHandle) {
-    let board_path = get_board_path(&app);
+    // If we can't even resolve the board path (cwd unavailable), there's nothing
+    // to watch. Warn the UI so it can surface "file sync is down" rather than
+    // panicking the setup thread or silently leaving sync dead.
+    let board_path = match get_board_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("File watcher setup failed: {e}");
+            let _ = app.emit("watcher-down", e);
+            return;
+        }
+    };
     // Don't create board.json here - let user create it by adding nodes
 
     std::thread::spawn(move || {
-        let (tx, rx) = channel();
-
-        let mut watcher: RecommendedWatcher = Watcher::new(
-            tx,
-            Config::default().with_poll_interval(Duration::from_millis(500)),
-        )
-        .expect("Failed to create watcher");
-
-        if let Some(parent) = board_path.parent() {
-            watcher
-                .watch(parent, RecursiveMode::NonRecursive)
-                .expect("Failed to watch directory");
-        }
-
-        // Debounce: track last emit time to avoid multiple emissions for one save
+        // Debounce: track last emit time to avoid multiple emissions for one save.
+        // Persisted across watcher re-establishments so a reconnect doesn't reset
+        // the debounce window mid-save.
         let mut last_emit: Option<std::time::Instant> = None;
         let debounce_duration = Duration::from_millis(500);
 
+        // Outer loop: (re-)establish the watch and run the event loop. We only
+        // break out of an inner event loop on a channel error, then fall through
+        // to here, warn the UI, back off, and rebuild — so a transient watcher
+        // failure degrades gracefully instead of permanently killing file sync.
         loop {
-            match rx.recv() {
-                Ok(event) => {
-                    if let Ok(event) = event {
-                        let is_board_file = event.paths.iter().any(|p| {
-                            p.file_name()
-                                .map(|n| n == "board.json")
-                                .unwrap_or(false)
-                        });
+            let (_watcher, rx) = match build_watcher(&board_path) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    // Couldn't establish the watch. Log, warn the UI so it can
+                    // surface "file sync is down", back off, and retry rather
+                    // than panicking the thread and silently losing sync.
+                    eprintln!("File watcher setup failed: {e}");
+                    let _ = app.emit("watcher-down", e);
+                    std::thread::sleep(WATCHER_RETRY_DELAY);
+                    continue;
+                }
+            };
 
-                        if is_board_file {
-                            match event.kind {
-                                notify::EventKind::Modify(_) | notify::EventKind::Create(_) => {
-                                    // Check if we should skip this emission (our own save)
-                                    let was_skip_set = SKIP_NEXT_EMIT.swap(false, Ordering::SeqCst);
-                                    if was_skip_set {
-                                        continue; // Skip emitting for our own save
+            // Inner event loop. `_watcher` is held in scope here so the channel
+            // stays open; dropping it (on `break`) closes the channel cleanly
+            // before we rebuild.
+            loop {
+                match rx.recv() {
+                    Ok(event) => {
+                        if let Ok(event) = event {
+                            let is_board_file = event
+                                .paths
+                                .iter()
+                                .any(|p| p.file_name().map(|n| n == "board.json").unwrap_or(false));
+
+                            if is_board_file {
+                                match event.kind {
+                                    notify::EventKind::Modify(_) | notify::EventKind::Create(_) => {
+                                        // Fingerprint the bytes on disk and compare against the
+                                        // hash of our own last write. A match means this event is
+                                        // the app's own save — skip emitting (no reload loop). A
+                                        // mismatch (or unreadable file mid-rename) is treated as an
+                                        // external edit and reloads. The hash check is read-only and
+                                        // idempotent, so the surplus events a single atomic rename
+                                        // fans out into are all suppressed, not just the first.
+                                        let is_own_save = match fs::read_to_string(&board_path) {
+                                            Ok(content) => {
+                                                let last_self = *LAST_SELF_WRITE_HASH
+                                                    .lock()
+                                                    .unwrap_or_else(|p| p.into_inner());
+                                                is_self_write(content_hash(&content), last_self)
+                                            }
+                                            // Couldn't read (e.g. transient state during the rename
+                                            // swap): err toward reloading rather than swallowing a
+                                            // real external change.
+                                            Err(_) => false,
+                                        };
+
+                                        let now = std::time::Instant::now();
+
+                                        if should_emit_change(
+                                            is_own_save,
+                                            last_emit,
+                                            now,
+                                            debounce_duration,
+                                        ) {
+                                            last_emit = Some(now);
+                                            std::thread::sleep(Duration::from_millis(100));
+                                            let _ = app.emit("board-changed", ());
+                                        } else if is_own_save {
+                                            // Record the timestamp even when we suppress our own
+                                            // save, so a trailing duplicate notify event arriving
+                                            // just after is debounced rather than slipping through
+                                            // (the file hash now matches, but defense in depth).
+                                            last_emit = Some(now);
+                                        }
                                     }
-
-                                    let now = std::time::Instant::now();
-                                    let should_emit = last_emit
-                                        .map(|t| now.duration_since(t) >= debounce_duration)
-                                        .unwrap_or(true);
-
-                                    if should_emit {
-                                        last_emit = Some(now);
-                                        std::thread::sleep(Duration::from_millis(100));
-                                        let _ = app.emit("board-changed", ());
-                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
                     }
-                }
-                Err(e) => {
-                    eprintln!("Watch error: {:?}", e);
-                    break;
+                    Err(e) => {
+                        // The sender side dropped / the channel broke. Instead of
+                        // killing the watcher thread permanently (the old
+                        // `break`-out-of-everything behavior), warn the UI, drop
+                        // this watcher (closing its channel), back off, and let
+                        // the outer loop re-establish the watch.
+                        eprintln!("Watch channel error: {e:?}");
+                        let _ = app.emit("watcher-down", format!("watch channel closed: {e}"));
+                        break;
+                    }
                 }
             }
+
+            std::thread::sleep(WATCHER_RETRY_DELAY);
         }
     });
 }
@@ -434,7 +1124,16 @@ pub fn run() {
             setup_file_watcher(app.handle().clone());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![load_board, save_board, get_board_path_cmd, fetch_link_preview, paste_image, read_image_base64, read_markdown_file, delete_asset])
+        .invoke_handler(tauri::generate_handler![
+            load_board,
+            save_board,
+            get_board_path_cmd,
+            fetch_link_preview,
+            paste_image,
+            read_image_base64,
+            read_markdown_file,
+            delete_asset
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -443,489 +1142,234 @@ pub fn run() {
 mod tests {
     use super::*;
 
-    mod board_tests {
+    mod cli_tests {
         use super::*;
 
-        #[test]
-        fn default_board_is_empty() {
-            let board = Board::default();
-            assert!(board.nodes.is_empty());
-            assert!(board.edges.is_empty());
+        fn node(id: &str, text: &str) -> Node {
+            Node::new(id.to_string(), 0.0, 0.0, text.to_string())
         }
 
-        #[test]
-        fn serde_round_trip() {
-            let board = Board {
-                nodes: vec![
-                    Node {
-                        id: "n1".to_string(),
-                        x: 0.0,
-                        y: 0.0,
-                        width: 200.0,
-                        height: 100.0,
-                        text: "First".to_string(),
-                        node_type: "text".to_string(),
-                        color: None,
-                        tags: vec![],
-                        status: None,
-                        group: None,
-                        priority: None,
-                    },
-                    Node {
-                        id: "n2".to_string(),
-                        x: 250.0,
-                        y: 0.0,
-                        width: 200.0,
-                        height: 100.0,
-                        text: "Second".to_string(),
-                        node_type: "idea".to_string(),
-                        color: None,
-                        tags: vec![],
-                        status: None,
-                        group: None,
-                        priority: None,
-                    },
-                ],
+        fn sample() -> Board {
+            let mut idea = node("a", "Pricing idea");
+            idea.node_type = NodeType::Idea;
+            idea.tags = vec!["urgent".to_string()];
+            idea.status = Some("todo".to_string());
+            idea.group = Some("g1".to_string());
+            idea.priority = Some(2);
+            Board {
+                version: None,
+                nodes: vec![idea, node("b", "Second\nmultiline")],
                 edges: vec![Edge {
                     id: "e1".to_string(),
-                    from_node: "n1".to_string(),
-                    to_node: "n2".to_string(),
-                    label: None,
+                    from_node: "a".to_string(),
+                    to_node: "b".to_string(),
+                    label: Some("relates".to_string()),
                 }],
-            };
-
-            let json = serde_json::to_string(&board).unwrap();
-            let deserialized: Board = serde_json::from_str(&json).unwrap();
-
-            assert_eq!(board.nodes.len(), deserialized.nodes.len());
-            assert_eq!(board.edges.len(), deserialized.edges.len());
-            assert_eq!(board.nodes[0].id, deserialized.nodes[0].id);
-            assert_eq!(board.nodes[0].text, deserialized.nodes[0].text);
-            assert_eq!(board.nodes[1].node_type, deserialized.nodes[1].node_type);
-        }
-
-        #[test]
-        fn deserialize_with_missing_node_type_uses_default() {
-            let json = r#"{
-                "nodes": [{
-                    "id": "n1",
-                    "x": 0,
-                    "y": 0,
-                    "width": 200,
-                    "height": 100,
-                    "text": "No type"
-                }],
-                "edges": []
-            }"#;
-
-            let board: Board = serde_json::from_str(json).unwrap();
-            assert_eq!(board.nodes[0].node_type, "text");
-        }
-
-        #[test]
-        fn deserialize_old_json_without_metadata_fields() {
-            let json = r#"{
-                "nodes": [{
-                    "id": "n1",
-                    "x": 0, "y": 0, "width": 200, "height": 100,
-                    "text": "Old node", "node_type": "idea"
-                }],
-                "edges": []
-            }"#;
-            let board: Board = serde_json::from_str(json).unwrap();
-            let node = &board.nodes[0];
-            assert!(node.color.is_none());
-            assert!(node.tags.is_empty());
-            assert!(node.status.is_none());
-            assert!(node.group.is_none());
-            assert!(node.priority.is_none());
-        }
-
-        #[test]
-        fn serde_round_trip_with_metadata() {
-            let node = Node {
-                id: "m1".to_string(),
-                x: 0.0, y: 0.0, width: 200.0, height: 100.0,
-                text: "Meta".to_string(),
-                node_type: "note".to_string(),
-                color: Some("#ff0000".to_string()),
-                tags: vec!["tag1".to_string(), "tag2".to_string()],
-                status: Some("done".to_string()),
-                group: Some("g1".to_string()),
-                priority: Some(1),
-            };
-            let json = serde_json::to_string(&node).unwrap();
-            let deserialized: Node = serde_json::from_str(&json).unwrap();
-            assert_eq!(deserialized.color, node.color);
-            assert_eq!(deserialized.tags, node.tags);
-            assert_eq!(deserialized.status, node.status);
-            assert_eq!(deserialized.group, node.group);
-            assert_eq!(deserialized.priority, node.priority);
-        }
-
-        #[test]
-        fn skip_serializing_empty_metadata() {
-            let node = Node {
-                id: "n1".to_string(),
-                x: 0.0, y: 0.0, width: 200.0, height: 100.0,
-                text: "Plain".to_string(),
-                node_type: "text".to_string(),
-                color: None,
-                tags: vec![],
-                status: None,
-                group: None,
-                priority: None,
-            };
-            let json = serde_json::to_string(&node).unwrap();
-            assert!(!json.contains("color"));
-            assert!(!json.contains("tags"));
-            assert!(!json.contains("status"));
-            assert!(!json.contains("group"));
-            assert!(!json.contains("priority"));
-        }
-
-        #[test]
-        fn serialize_produces_valid_json() {
-            let board = Board {
-                nodes: vec![Node {
-                    id: "test".to_string(),
-                    x: 100.0,
-                    y: 200.0,
-                    width: 200.0,
-                    height: 100.0,
-                    text: "Hello \"world\"".to_string(),
-                    node_type: "text".to_string(),
-                    color: None,
-                    tags: vec![],
-                    status: None,
-                    group: None,
-                    priority: None,
-                }],
-                edges: vec![],
-            };
-
-            let json = serde_json::to_string_pretty(&board).unwrap();
-            assert!(json.contains("\"id\": \"test\""));
-            assert!(json.contains("\"x\": 100.0"));
-            assert!(json.contains("Hello \\\"world\\\""));
-        }
-    }
-
-    mod link_preview_tests {
-        use super::*;
-
-        #[test]
-        fn default_has_empty_url() {
-            let preview = LinkPreview::default();
-            assert_eq!(preview.url, "");
-            assert!(preview.title.is_none());
-        }
-
-        #[test]
-        fn serde_with_optional_fields() {
-            let preview = LinkPreview {
-                url: "https://example.com".to_string(),
-                title: Some("Title".to_string()),
-                description: None,
-                image: Some("https://example.com/img.png".to_string()),
-                site_name: None,
-            };
-
-            let json = serde_json::to_string(&preview).unwrap();
-            let deserialized: LinkPreview = serde_json::from_str(&json).unwrap();
-
-            assert_eq!(preview.url, deserialized.url);
-            assert_eq!(preview.title, deserialized.title);
-            assert_eq!(preview.description, deserialized.description);
-            assert_eq!(preview.image, deserialized.image);
-        }
-    }
-
-    mod stress_tests {
-        use super::*;
-
-        #[test]
-        fn board_with_1000_nodes_serde() {
-            let nodes: Vec<Node> = (0..1000)
-                .map(|i| Node {
-                    id: format!("node-{}", i),
-                    x: (i % 50) as f64 * 250.0,
-                    y: (i / 50) as f64 * 150.0,
-                    width: 200.0,
-                    height: 100.0,
-                    text: format!("Content for node {}", i),
-                    node_type: "text".to_string(),
-                    color: None,
-                    tags: vec![],
-                    status: None,
-                    group: None,
-                    priority: None,
-                })
-                .collect();
-
-            let board = Board { nodes, edges: vec![] };
-
-            let json = serde_json::to_string_pretty(&board).unwrap();
-            let deserialized: Board = serde_json::from_str(&json).unwrap();
-
-            assert_eq!(deserialized.nodes.len(), 1000);
-            assert_eq!(deserialized.nodes[500].id, "node-500");
-        }
-
-        #[test]
-        fn board_with_complex_edges() {
-            let nodes: Vec<Node> = (0..50)
-                .map(|i| Node {
-                    id: format!("n{}", i),
-                    x: i as f64 * 250.0,
-                    y: 0.0,
-                    width: 200.0,
-                    height: 100.0,
-                    text: format!("Node {}", i),
-                    node_type: "text".to_string(),
-                    color: None,
-                    tags: vec![],
-                    status: None,
-                    group: None,
-                    priority: None,
-                })
-                .collect();
-
-            let mut edges = Vec::new();
-            let mut id = 0;
-            for i in 0..50 {
-                for j in (i + 1)..50 {
-                    edges.push(Edge {
-                        id: format!("e{}", id),
-                        from_node: format!("n{}", i),
-                        to_node: format!("n{}", j),
-                        label: None,
-                    });
-                    id += 1;
-                }
-            }
-
-            let board = Board { nodes, edges };
-            let expected_edges = 50 * 49 / 2;
-            assert_eq!(board.edges.len(), expected_edges);
-
-            let json = serde_json::to_string(&board).unwrap();
-            let deserialized: Board = serde_json::from_str(&json).unwrap();
-            assert_eq!(deserialized.edges.len(), expected_edges);
-        }
-
-        #[test]
-        fn node_with_large_text() {
-            let large_text: String = (0..10000).map(|_| 'x').collect();
-            let node = Node {
-                id: "large".to_string(),
-                x: 0.0,
-                y: 0.0,
-                width: 200.0,
-                height: 100.0,
-                text: large_text.clone(),
-                node_type: "text".to_string(),
-                color: None,
-                tags: vec![],
-                status: None,
-                group: None,
-                priority: None,
-            };
-
-            let board = Board { nodes: vec![node], edges: vec![] };
-            let json = serde_json::to_string(&board).unwrap();
-            let deserialized: Board = serde_json::from_str(&json).unwrap();
-
-            assert_eq!(deserialized.nodes[0].text.len(), 10000);
-        }
-    }
-
-    mod edge_cases {
-        use super::*;
-
-        #[test]
-        fn node_with_special_characters_in_text() {
-            let text = r#"Quotes: "test" 'single' and \backslash\ and tabs	here"#;
-            let node = Node {
-                id: "special".to_string(),
-                x: 0.0,
-                y: 0.0,
-                width: 200.0,
-                height: 100.0,
-                text: text.to_string(),
-                node_type: "text".to_string(),
-                color: None,
-                tags: vec![],
-                status: None,
-                group: None,
-                priority: None,
-            };
-
-            let json = serde_json::to_string(&node).unwrap();
-            let deserialized: Node = serde_json::from_str(&json).unwrap();
-            assert_eq!(deserialized.text, text);
-        }
-
-        #[test]
-        fn node_with_unicode() {
-            let text = "日本語 中文 한국어 العربية 🎉🚀";
-            let node = Node {
-                id: "unicode".to_string(),
-                x: 0.0,
-                y: 0.0,
-                width: 200.0,
-                height: 100.0,
-                text: text.to_string(),
-                node_type: "text".to_string(),
-                color: None,
-                tags: vec![],
-                status: None,
-                group: None,
-                priority: None,
-            };
-
-            let json = serde_json::to_string(&node).unwrap();
-            let deserialized: Node = serde_json::from_str(&json).unwrap();
-            assert_eq!(deserialized.text, text);
-        }
-
-        #[test]
-        fn all_node_types() {
-            let types = vec!["text", "idea", "note", "image", "md", "link"];
-            for node_type in types {
-                let node = Node {
-                    id: format!("node-{}", node_type),
-                    x: 0.0,
-                    y: 0.0,
-                    width: 200.0,
-                    height: 100.0,
-                    text: "content".to_string(),
-                    node_type: node_type.to_string(),
-                    color: None,
-                    tags: vec![],
-                    status: None,
-                    group: None,
-                    priority: None,
-                };
-
-                let json = serde_json::to_string(&node).unwrap();
-                let deserialized: Node = serde_json::from_str(&json).unwrap();
-                assert_eq!(deserialized.node_type, node_type);
             }
         }
 
         #[test]
-        fn node_with_negative_coordinates() {
-            let node = Node {
-                id: "neg".to_string(),
-                x: -1000.0,
-                y: -500.0,
-                width: 200.0,
-                height: 100.0,
-                text: "negative".to_string(),
-                node_type: "text".to_string(),
-                color: None,
-                tags: vec![],
-                status: None,
-                group: None,
-                priority: None,
-            };
-
-            let json = serde_json::to_string(&node).unwrap();
-            let deserialized: Node = serde_json::from_str(&json).unwrap();
-            assert_eq!(deserialized.x, -1000.0);
-            assert_eq!(deserialized.y, -500.0);
+        fn validate_clean_board_is_ok() {
+            let raw = serde_json::to_string(&sample()).unwrap();
+            let report = validate_board_text(&raw).unwrap();
+            assert!(report.is_clean());
+            assert!(report.unknown_keys.is_empty());
         }
 
         #[test]
-        fn node_with_float_precision() {
-            let node = Node {
-                id: "precise".to_string(),
-                x: 123.456789,
-                y: 987.654321,
-                width: 200.123,
-                height: 100.789,
-                text: "precise".to_string(),
-                node_type: "text".to_string(),
-                color: None,
-                tags: vec![],
-                status: None,
-                group: None,
-                priority: None,
-            };
+        fn validate_dangling_edge_board_reports_offending_id() {
+            // An edge references a node id that does not exist.
+            let raw = r#"{"nodes":[{"id":"a","x":0,"y":0,"text":"A","node_type":"text"}],
+                "edges":[{"id":"bad-edge","from_node":"a","to_node":"ghost"}]}"#;
+            let report = validate_board_text(raw).unwrap();
+            assert!(!report.is_clean());
+            assert!(report.errors.contains(&ValidationError::DanglingEdge {
+                edge_id: "bad-edge".to_string(),
+                missing_node: "ghost".to_string(),
+            }));
+        }
 
-            let json = serde_json::to_string(&node).unwrap();
-            let deserialized: Node = serde_json::from_str(&json).unwrap();
-            assert!((deserialized.x - 123.456789).abs() < 1e-6);
-            assert!((deserialized.y - 987.654321).abs() < 1e-6);
+        #[test]
+        fn validate_rejects_unparseable_text() {
+            assert!(validate_board_text("{ not json ]").is_err());
+        }
+
+        #[test]
+        fn unknown_top_level_keys_flagged() {
+            let raw = r#"{"nodes":[],"edges":[],"theme":"dark","extra":1}"#;
+            let mut keys = unknown_top_level_keys(raw);
+            keys.sort();
+            assert_eq!(keys, vec!["extra".to_string(), "theme".to_string()]);
+        }
+
+        #[test]
+        fn known_keys_not_flagged() {
+            let raw = r#"{"version":1,"nodes":[],"edges":[]}"#;
+            assert!(unknown_top_level_keys(raw).is_empty());
+        }
+
+        #[test]
+        fn unknown_keys_do_not_make_report_unclean() {
+            let raw = r#"{"nodes":[],"edges":[],"future":true}"#;
+            let report = validate_board_text(raw).unwrap();
+            assert!(report.is_clean(), "unknown keys are warnings, not errors");
+            assert_eq!(report.unknown_keys, vec!["future".to_string()]);
+        }
+
+        #[test]
+        fn future_version_is_a_warning_not_a_fatal_error() {
+            // A board declaring a newer schema version validates "clean" (exit 0):
+            // it is surfaced as a warning, not a rejection (forward-compat).
+            let raw = format!(
+                r#"{{"version":{},"nodes":[],"edges":[]}}"#,
+                CURRENT_BOARD_VERSION + 1
+            );
+            let report = validate_board_text(&raw).unwrap();
+            assert!(report.is_clean(), "future version must not be fatal");
+            assert_eq!(report.fatal_errors().count(), 0);
+            assert_eq!(report.warnings().count(), 1);
+        }
+
+        #[test]
+        fn query_count() {
+            assert_eq!(
+                query_board(&sample(), "count").unwrap(),
+                "2 node(s), 1 edge(s)"
+            );
+        }
+
+        #[test]
+        fn query_nodes_lists_each() {
+            let out = query_board(&sample(), "nodes").unwrap();
+            assert!(out.contains("a  [idea]  Pricing idea"));
+            // Multiline text shows only the first line.
+            assert!(out.contains("b  [text]  Second"));
+            assert!(!out.contains("multiline"));
+        }
+
+        #[test]
+        fn query_edges_includes_label() {
+            let out = query_board(&sample(), "edges").unwrap();
+            assert_eq!(out, "e1: a -> b (relates)");
+        }
+
+        #[test]
+        fn query_node_detail() {
+            let out = query_board(&sample(), "node:a").unwrap();
+            assert!(out.contains("id: a"));
+            assert!(out.contains("type: idea"));
+            assert!(out.contains("tags: urgent"));
+            assert!(out.contains("status: todo"));
+            assert!(out.contains("priority: 2"));
+        }
+
+        #[test]
+        fn query_node_missing_errors() {
+            assert!(query_board(&sample(), "node:nope").is_err());
+        }
+
+        #[test]
+        fn query_type_filter() {
+            let out = query_board(&sample(), "type:idea").unwrap();
+            assert!(out.contains("a"));
+            assert!(!out.contains("\nb"));
+        }
+
+        #[test]
+        fn query_tag_filter() {
+            let out = query_board(&sample(), "tag:urgent").unwrap();
+            assert!(out.contains("a"));
+        }
+
+        #[test]
+        fn query_status_and_group_and_priority() {
+            assert!(query_board(&sample(), "status:todo").unwrap().contains("a"));
+            assert!(query_board(&sample(), "group:g1").unwrap().contains("a"));
+            assert!(query_board(&sample(), "priority:2").unwrap().contains("a"));
+        }
+
+        #[test]
+        fn query_no_match_message() {
+            let out = query_board(&sample(), "tag:missing").unwrap();
+            assert!(out.contains("no nodes match"));
+        }
+
+        #[test]
+        fn query_bad_priority_value_errors() {
+            assert!(query_board(&sample(), "priority:notanumber").is_err());
+        }
+
+        #[test]
+        fn query_unsupported_expr_errors() {
+            let err = query_board(&sample(), "bogus").unwrap_err();
+            assert!(err.contains("unsupported query"));
+            assert!(err.contains("count"));
         }
     }
 
     mod read_markdown_file_tests {
         use super::*;
 
+        // Each test owns a fresh `tempfile::tempdir()` so parallel runs never
+        // collide on a shared fixed file name (was the F80 race). The TempDir is
+        // RAII-cleaned on drop — no manual removal needed.
+
         #[test]
         fn reads_absolute_path() {
-            let dir = std::env::temp_dir();
-            let path = dir.join("test_read_absolute.md");
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let path = dir.path().join("test_read_absolute.md");
             let content = "# Test\nHello world";
             std::fs::write(&path, content).unwrap();
 
-            let result = read_markdown_file(path.to_string_lossy().to_string());
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
-
-            std::fs::remove_file(&path).ok();
         }
 
         #[test]
         fn reads_file_url() {
-            let dir = std::env::temp_dir();
-            let path = dir.join("test_read_file_url.md");
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let path = dir.path().join("test_read_file_url.md");
             let content = "# File URL Test";
             std::fs::write(&path, content).unwrap();
 
             let file_url = format!("file://{}", path.to_string_lossy());
-            let result = read_markdown_file(file_url);
+            let result = read_markdown_file_scoped(&file_url, &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
-
-            std::fs::remove_file(&path).ok();
         }
 
         #[test]
         fn decodes_url_encoded_spaces() {
-            let dir = std::env::temp_dir();
-            let subdir = dir.join("test folder");
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let subdir = dir.path().join("test folder");
             std::fs::create_dir_all(&subdir).ok();
             let path = subdir.join("test file.md");
             let content = "# Spaces in path";
             std::fs::write(&path, content).unwrap();
 
             // URL encode the path with %20 for spaces
-            let encoded_path = format!(
-                "file://{}",
-                path.to_string_lossy().replace(' ', "%20")
-            );
-            let result = read_markdown_file(encoded_path);
+            let encoded_path = format!("file://{}", path.to_string_lossy().replace(' ', "%20"));
+            let result = read_markdown_file_scoped(&encoded_path, &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
-
-            std::fs::remove_file(&path).ok();
-            std::fs::remove_dir(&subdir).ok();
         }
 
         #[test]
         fn expands_home_tilde() {
-            // This test verifies tilde expansion works
-            // We can only test the path transformation, not the actual read
-            // unless we create a file in the actual home directory
+            // This test verifies tilde expansion works. It must write to the real
+            // home directory (that's what `~` resolves to), so the file name is
+            // UUID-suffixed to stay unique across parallel test binaries.
             let home = dirs::home_dir().unwrap();
-            let test_file = home.join(".brainstorm_test_temp.md");
+            let name = format!(".brainstorm_test_temp_{}.md", uuid::Uuid::new_v4());
+            let test_file = home.join(&name);
             let content = "# Home test";
             std::fs::write(&test_file, content).unwrap();
 
-            let result = read_markdown_file("~/.brainstorm_test_temp.md".to_string());
+            let result = read_markdown_file_scoped(&format!("~/{}", name), &[home]);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
 
@@ -934,43 +1378,44 @@ mod tests {
 
         #[test]
         fn returns_error_for_nonexistent_file() {
-            let result = read_markdown_file("/nonexistent/path/to/file.md".to_string());
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let missing = dir.path().join("does_not_exist.md");
+            let result = read_markdown_file_scoped(&missing.to_string_lossy(), &roots);
             assert!(result.is_err());
-            assert!(result.unwrap_err().contains("Failed to read"));
         }
 
         #[test]
         fn handles_unicode_content() {
-            let dir = std::env::temp_dir();
-            let path = dir.join("test_unicode.md");
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let path = dir.path().join("test_unicode.md");
             let content = "# Unicode Test\n日本語 中文 한국어 🎉";
             std::fs::write(&path, content).unwrap();
 
-            let result = read_markdown_file(path.to_string_lossy().to_string());
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
-
-            std::fs::remove_file(&path).ok();
         }
 
         #[test]
         fn handles_empty_file() {
-            let dir = std::env::temp_dir();
-            let path = dir.join("test_empty.md");
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let path = dir.path().join("test_empty.md");
             std::fs::write(&path, "").unwrap();
 
-            let result = read_markdown_file(path.to_string_lossy().to_string());
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), "");
-
-            std::fs::remove_file(&path).ok();
         }
 
         #[test]
         fn handles_multiple_encoded_characters() {
-            let dir = std::env::temp_dir();
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
             // Create a path with multiple special chars that need encoding
-            let subdir = dir.join("test & folder");
+            let subdir = dir.path().join("test & folder");
             std::fs::create_dir_all(&subdir).ok();
             let path = subdir.join("notes (copy).md");
             let content = "# Special chars in path";
@@ -985,12 +1430,263 @@ mod tests {
                     .replace('(', "%28")
                     .replace(')', "%29")
             );
-            let result = read_markdown_file(encoded_path);
+            let result = read_markdown_file_scoped(&encoded_path, &roots);
             assert!(result.is_ok());
             assert_eq!(result.unwrap(), content);
+        }
 
-            std::fs::remove_file(&path).ok();
-            std::fs::remove_dir(&subdir).ok();
+        #[test]
+        fn rejects_md_file_outside_allowed_roots() {
+            // A .md file that exists but lives outside the allowed roots is denied.
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("test_outside_scope.md");
+            std::fs::write(&path, "# secret").unwrap();
+
+            // Allowed root is an unrelated subdirectory, NOT the dir holding the file.
+            let other_root = dir.path().join("brainstorm_unrelated_root");
+            std::fs::create_dir_all(&other_root).ok();
+
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &[other_root.clone()]);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().contains("Access denied"));
+        }
+
+        #[test]
+        fn rejects_non_md_file_inside_allowed_roots() {
+            // Even inside an allowed root, a non-.md file (e.g. an imitation of a
+            // system secret) is rejected by the extension guard.
+            let dir = tempfile::tempdir().unwrap();
+            let roots = vec![dir.path().to_path_buf()];
+            let path = dir.path().join("test_secret_creds.txt");
+            std::fs::write(&path, "topsecret").unwrap();
+
+            let result = read_markdown_file_scoped(&path.to_string_lossy(), &roots);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().contains("only .md"));
+        }
+    }
+
+    mod path_scope_tests {
+        use super::*;
+
+        #[test]
+        fn rejects_etc_passwd_for_image_read() {
+            // /etc/passwd is outside any board dir and not image bytes anyway.
+            let dir = tempfile::tempdir().unwrap();
+            let board = dir.path().to_path_buf();
+
+            let result = read_image_base64_scoped("/etc/passwd", &[board]);
+            assert!(result.is_err(), "/etc/passwd must be rejected");
+        }
+
+        #[test]
+        fn rejects_ssh_key_for_markdown_read() {
+            let home = dirs::home_dir().unwrap();
+            // ~/.ssh/id_rsa: even if it existed under the home root, it is not a
+            // .md file, so the extension guard rejects it. And on machines where
+            // it doesn't exist, canonicalize fails first. Either way -> Err.
+            let result = read_markdown_file_scoped("~/.ssh/id_rsa", &[home]);
+            assert!(result.is_err(), "~/.ssh/id_rsa must be rejected");
+        }
+
+        #[test]
+        fn rejects_path_traversal_escape() {
+            // A path that climbs out of the board dir via `..` must be rejected
+            // because canonicalization resolves it outside the allowed root.
+            let dir = tempfile::tempdir().unwrap();
+            let board = dir.path().join("board");
+            std::fs::create_dir_all(&board).ok();
+
+            // Create a real .md file OUTSIDE the board dir, then reference it via ..
+            let secret = dir.path().join("brainstorm_outside_secret.md");
+            std::fs::write(&secret, "# leak").unwrap();
+
+            let traversal = format!(
+                "{}/../brainstorm_outside_secret.md",
+                board.to_string_lossy()
+            );
+            let result = read_markdown_file_scoped(&traversal, &[board.clone()]);
+            assert!(result.is_err(), "traversal escape must be rejected");
+        }
+
+        #[test]
+        fn allows_image_inside_board_dir() {
+            // A real PNG inside the board dir is accepted and base64-encoded.
+            let dir = tempfile::tempdir().unwrap();
+            let board = dir.path().to_path_buf();
+
+            // Minimal valid PNG magic-byte header (signature is enough for sniffing).
+            let png_sig = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01];
+            let img = board.join("pic.png");
+            std::fs::write(&img, png_sig).unwrap();
+
+            let result = read_image_base64_scoped(&img.to_string_lossy(), &[board.clone()]);
+            assert!(result.is_ok(), "board-dir image should load: {:?}", result);
+            assert!(result.unwrap().starts_with("data:image/png;base64,"));
+        }
+
+        #[test]
+        fn rejects_non_image_content_with_image_extension() {
+            // A text file renamed to .png is rejected by magic-byte sniffing.
+            let dir = tempfile::tempdir().unwrap();
+            let board = dir.path().to_path_buf();
+
+            let fake = board.join("evil.png");
+            std::fs::write(&fake, b"root:x:0:0:root:/root:/bin/bash\n").unwrap();
+
+            let result = read_image_base64_scoped(&fake.to_string_lossy(), &[board.clone()]);
+            assert!(result.is_err(), "non-image content must be rejected");
+            assert!(result.unwrap_err().contains("non-image"));
+        }
+
+        #[test]
+        fn rejects_oversized_image() {
+            let dir = tempfile::tempdir().unwrap();
+            let board = dir.path().to_path_buf();
+
+            // Write a file larger than the cap. Start with a PNG signature so the
+            // size check (which runs first) is unambiguously what rejects it.
+            let big = board.join("huge.png");
+            let mut data = vec![0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+            data.resize((MAX_IMAGE_BYTES + 1) as usize, 0u8);
+            std::fs::write(&big, &data).unwrap();
+
+            let result = read_image_base64_scoped(&big.to_string_lossy(), &[board.clone()]);
+            assert!(result.is_err(), "oversized image must be rejected");
+            assert!(result.unwrap_err().contains("too large"));
+        }
+
+        #[test]
+        fn sniff_detects_supported_formats() {
+            assert_eq!(
+                sniff_image_mime(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+                Some("image/png")
+            );
+            assert_eq!(
+                sniff_image_mime(&[0xFF, 0xD8, 0xFF, 0xE0]),
+                Some("image/jpeg")
+            );
+            assert_eq!(sniff_image_mime(b"GIF89a..."), Some("image/gif"));
+            assert_eq!(sniff_image_mime(b"GIF87a..."), Some("image/gif"));
+            assert_eq!(
+                sniff_image_mime(b"RIFF\0\0\0\0WEBPVP8 "),
+                Some("image/webp")
+            );
+            assert_eq!(sniff_image_mime(b"BM\0\0"), Some("image/bmp"));
+            assert_eq!(sniff_image_mime(b"not an image"), None);
+            assert_eq!(sniff_image_mime(&[]), None);
+        }
+    }
+
+    mod ssrf_tests {
+        use super::*;
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+        use std::str::FromStr;
+
+        fn v4(s: &str) -> IpAddr {
+            IpAddr::V4(Ipv4Addr::from_str(s).unwrap())
+        }
+        fn v6(s: &str) -> IpAddr {
+            IpAddr::V6(Ipv6Addr::from_str(s).unwrap())
+        }
+
+        #[test]
+        fn blocks_loopback() {
+            assert!(is_blocked_ip(v4("127.0.0.1")));
+            assert!(is_blocked_ip(v4("127.255.255.255")));
+            assert!(is_blocked_ip(v6("::1")));
+        }
+
+        #[test]
+        fn blocks_link_local() {
+            // 169.254.0.0/16 includes the cloud metadata endpoint 169.254.169.254
+            assert!(is_blocked_ip(v4("169.254.0.1")));
+            assert!(is_blocked_ip(v4("169.254.169.254")));
+            // fe80::/10
+            assert!(is_blocked_ip(v6("fe80::1")));
+            assert!(is_blocked_ip(v6("febf::1")));
+        }
+
+        #[test]
+        fn blocks_rfc1918_private() {
+            assert!(is_blocked_ip(v4("10.0.0.1")));
+            assert!(is_blocked_ip(v4("10.255.255.255")));
+            assert!(is_blocked_ip(v4("172.16.0.1")));
+            assert!(is_blocked_ip(v4("172.31.255.255")));
+            assert!(is_blocked_ip(v4("192.168.1.1")));
+        }
+
+        #[test]
+        fn blocks_cgnat() {
+            // 100.64.0.0/10 spans 100.64.0.0 .. 100.127.255.255
+            assert!(is_blocked_ip(v4("100.64.0.1")));
+            assert!(is_blocked_ip(v4("100.127.255.255")));
+        }
+
+        #[test]
+        fn blocks_ula_and_unspecified() {
+            // fc00::/7 (fc00:: .. fdff::)
+            assert!(is_blocked_ip(v6("fc00::1")));
+            assert!(is_blocked_ip(v6("fd12:3456::1")));
+            assert!(is_blocked_ip(v4("0.0.0.0")));
+            assert!(is_blocked_ip(v6("::")));
+            assert!(is_blocked_ip(v4("255.255.255.255")));
+        }
+
+        #[test]
+        fn blocks_ipv4_mapped_loopback() {
+            // ::ffff:127.0.0.1 must normalize to the v4 loopback and be blocked.
+            assert!(is_blocked_ip(v6("::ffff:127.0.0.1")));
+            assert!(is_blocked_ip(v6("::ffff:10.0.0.1")));
+            assert!(is_blocked_ip(v6("::ffff:169.254.169.254")));
+        }
+
+        #[test]
+        fn allows_public_addresses() {
+            assert!(!is_blocked_ip(v4("8.8.8.8")));
+            assert!(!is_blocked_ip(v4("1.1.1.1")));
+            assert!(!is_blocked_ip(v4("172.15.255.255"))); // just below 172.16/12
+            assert!(!is_blocked_ip(v4("172.32.0.1"))); // just above 172.16/12
+            assert!(!is_blocked_ip(v4("100.63.255.255"))); // just below CGNAT
+            assert!(!is_blocked_ip(v4("100.128.0.0"))); // just above CGNAT
+            assert!(!is_blocked_ip(v4("93.184.216.34"))); // example.com
+            assert!(!is_blocked_ip(v6("2606:4700:4700::1111"))); // cloudflare
+        }
+
+        #[test]
+        fn check_host_allowed_rejects_loopback_literal() {
+            assert!(check_host_allowed("127.0.0.1", 80).is_err());
+            assert!(check_host_allowed("169.254.169.254", 80).is_err());
+        }
+
+        #[test]
+        fn check_host_allowed_rejects_decimal_literal() {
+            // http://2130706433/ == 127.0.0.1
+            assert!(check_host_allowed("2130706433", 80).is_err());
+        }
+
+        #[test]
+        fn validate_url_host_rejects_metadata_endpoint() {
+            let u = reqwest::Url::parse("http://169.254.169.254/latest/meta-data/").unwrap();
+            assert!(validate_url_host(&u).is_err());
+        }
+
+        #[test]
+        fn validate_url_host_rejects_decimal_loopback() {
+            let u = reqwest::Url::parse("http://2130706433/").unwrap();
+            assert!(validate_url_host(&u).is_err());
+        }
+
+        #[test]
+        fn validate_url_host_rejects_ipv6_mapped_loopback() {
+            let u = reqwest::Url::parse("http://[::ffff:127.0.0.1]/").unwrap();
+            assert!(validate_url_host(&u).is_err());
+        }
+
+        #[test]
+        fn validate_url_host_rejects_localhost() {
+            let u = reqwest::Url::parse("http://localhost:8080/admin").unwrap();
+            assert!(validate_url_host(&u).is_err());
         }
     }
 }

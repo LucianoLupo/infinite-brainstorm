@@ -7,7 +7,6 @@
     "core:default",
     "core:event:default",
     "core:event:allow-listen",
-    "core:event:allow-emit",
     "opener:default",
     "fs:default",
     "fs:allow-app-read",
@@ -18,10 +17,9 @@
       "identifier": "fs:scope",
       "allow": [
         "$APPDATA/**",
-        "$HOME/**",
-        "/Users/**",
-        "/tmp/**",
-        "**"
+        "$APPLOCALDATA/**",
+        "$APPCONFIG/**",
+        "$APPCACHE/**"
       ]
     },
     "clipboard-manager:default",

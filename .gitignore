@@ -4,6 +4,11 @@
 
 # User data (each project has its own board)
 board.json
+# Atomic-save byproducts written next to board.json (temp file + backup)
+board.json.tmp
+board.json.bak
+# Pasted images are written alongside the board at runtime
+/assets/
 
 # macOS
 .DS_Store
@@ -29,7 +34,8 @@ Desktop.ini
 
 # Rust
 **/*.rs.bk
-Cargo.lock
+# Cargo.lock is committed: this workspace builds binaries/apps, so a pinned
+# lockfile gives reproducible CI + local builds. Do not re-add an ignore here.
 
 # Tauri
 /src-tauri/target/

@@ -21,10 +21,10 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; script-src 'self'; img-src 'self' data: asset: https: blob:; connect-src 'self' ipc: https:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-src 'none'",
       "assetProtocol": {
         "enable": true,
-        "scope": ["**", "$HOME/**", "/Users/**", "/tmp/**"]
+        "scope": ["$APPDATA/**", "$APPLOCALDATA/**", "$RESOURCE/**"]
       }
     }
   },

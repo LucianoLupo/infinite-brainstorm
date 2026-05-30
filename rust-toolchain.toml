@@ -1,0 +1,7 @@
+[toolchain]
+# Pin a stable channel for reproducible builds across local + CI.
+# Compatible with wasm-bindgen 0.2.108 (see Cargo.toml / Trunk.toml).
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

@@ -1,10 +1,13 @@
+use crate::app::{is_local_md_file, parse_markdown, BoardDataCtx, EditingCtx};
+use crate::canvas::LoadState;
+use crate::interaction::BoardAction;
+use crate::state::NodeType;
 use leptos::prelude::*;
-use leptos::task::spawn_local;
-use crate::app::{BoardCtx, is_local_md_file, parse_markdown, save_board_storage};
 
 #[component]
 pub fn MarkdownModal() -> impl IntoView {
-    let ctx = use_context::<BoardCtx>().unwrap();
+    let board_ctx = use_context::<BoardDataCtx>().unwrap();
+    let ctx = use_context::<EditingCtx>().unwrap();
 
     move || {
         if let Some((node_id, is_editing)) = ctx.modal_md.get() {
@@ -54,17 +57,16 @@ pub fn MarkdownModal() -> impl IntoView {
                                                    font-family: inherit; font-size: 12px; font-weight: bold;"
                                             on:click=move |_| {
                                                 let new_content = ctx.md_edit_text.get_untracked();
-                                                let nid = node_id_save.clone();
-                                                ctx.set_board.update(|b| {
-                                                    if let Some(node) = b.nodes.iter_mut().find(|n| n.id == nid) {
-                                                        node.text = new_content;
-                                                    }
-                                                });
-
-                                                let current_board = ctx.board.get_untracked();
-                                                spawn_local(async move {
-                                                    save_board_storage(&current_board).await;
-                                                });
+                                                // Dispatch through the reducer so the
+                                                // commit snapshots undo history
+                                                // (fixes undo dropping edits, F52/F109).
+                                                ctx.dispatch.apply(
+                                                    BoardAction::EditMarkdown {
+                                                        id: node_id_save.clone(),
+                                                        text: new_content,
+                                                    },
+                                                    None,
+                                                );
 
                                                 ctx.set_modal_md.set(Some((node_id_save.clone(), false)));
                                             }
@@ -73,10 +75,10 @@ pub fn MarkdownModal() -> impl IntoView {
                                         </button>
                                     }.into_any()
                                 } else {
-                                    let b = ctx.board.get();
+                                    let b = board_ctx.board.get();
                                     let is_md_link = b.nodes.iter()
                                         .find(|n| n.id == node_id)
-                                        .map(|n| n.node_type == "link" && is_local_md_file(&n.text))
+                                        .map(|n| n.node_type == NodeType::Link && is_local_md_file(&n.text))
                                         .unwrap_or(false);
 
                                     if is_md_link {
@@ -90,7 +92,7 @@ pub fn MarkdownModal() -> impl IntoView {
                                                        padding: 8px 16px; cursor: pointer; \
                                                        font-family: inherit; font-size: 12px; font-weight: bold;"
                                                 on:click=move |_| {
-                                                    let b = ctx.board.get_untracked();
+                                                    let b = board_ctx.board.get_untracked();
                                                     if let Some((id, _)) = ctx.modal_md.get_untracked() {
                                                         if let Some(n) = b.nodes.iter().find(|n| n.id == id) {
                                                             ctx.set_md_edit_text.set(n.text.clone());
@@ -105,6 +107,18 @@ pub fn MarkdownModal() -> impl IntoView {
                                     }
                                 }
                             }}
+                            <button
+                                style="background: transparent; color: #66cc88; border: 1px solid #66cc88; \
+                                       width: 34px; padding: 8px 0; cursor: pointer; \
+                                       font-family: inherit; font-size: 16px; line-height: 1;"
+                                title="Close (Esc)"
+                                on:click=move |ev: web_sys::MouseEvent| {
+                                    ev.stop_propagation();
+                                    ctx.set_modal_md.set(None);
+                                }
+                            >
+                                "\u{00d7}"
+                            </button>
                         </div>
                         <div style="flex: 1; overflow-y: auto; min-height: 0;">
                             {move || {
@@ -125,16 +139,17 @@ pub fn MarkdownModal() -> impl IntoView {
                                         />
                                     }.into_any()
                                 } else {
-                                    let b = ctx.board.get();
+                                    let b = board_ctx.board.get();
                                     let md_cache_content = ctx.md_file_cache.get();
                                     let content = b.nodes.iter()
                                         .find(|n| n.id == nid)
                                         .map(|n| {
-                                            if n.node_type == "link" && is_local_md_file(&n.text) {
-                                                md_cache_content
-                                                    .get(&n.text)
-                                                    .and_then(|opt: &Option<String>| opt.clone())
-                                                    .unwrap_or_else(|| "Loading...".to_string())
+                                            if n.node_type == NodeType::Link && is_local_md_file(&n.text) {
+                                                match md_cache_content.get(&n.text) {
+                                                    Some(LoadState::Loaded(c)) => c.clone(),
+                                                    Some(LoadState::Failed) => "*Failed to load file.*".to_string(),
+                                                    _ => "Loading...".to_string(),
+                                                }
                                             } else {
                                                 n.text.clone()
                                             }

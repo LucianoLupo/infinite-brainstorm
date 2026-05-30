@@ -1,5 +1,5 @@
 use crate::canvas::{get_canvas_context, render_board, ImageCache, LinkPreviewCache};
-use crate::components::{ImageModal, MarkdownModal, MarkdownOverlays, NodeEditor};
+use crate::components::{ErrorBanner, ImageModal, MarkdownModal, MarkdownOverlays, NodeEditor};
 use crate::history::History;
 use crate::state::{Board, Camera, Edge, LinkPreview, Node, ResizeHandle, RESIZE_HANDLE_SIZE, MIN_NODE_WIDTH, MIN_NODE_HEIGHT};
 use leptos::prelude::*;
@@ -31,16 +31,69 @@ fn is_tauri() -> bool {
         .unwrap_or(false)
 }
 
-async fn load_board_storage() -> Board {
+/// Result of attempting to load a board from storage.
+///
+/// Distinguishes a missing/empty source (safe to fall back to an empty board)
+/// from a present-but-invalid source (a parse error that must NOT be allowed to
+/// blank out the existing board, otherwise the next save destroys the only data file).
+#[derive(Debug, Clone)]
+pub enum LoadOutcome {
+    /// A valid board was parsed from storage.
+    Loaded(Board),
+    /// No board exists yet (file/key missing or empty) — a fresh `Board::default()` is appropriate.
+    Absent,
+    /// Storage held data but it failed to parse — carries the serde error message.
+    ParseError(String),
+}
+
+/// Parse a localStorage JSON string into a [`LoadOutcome`].
+///
+/// Empty / whitespace-only input is treated as [`LoadOutcome::Absent`]; invalid
+/// JSON yields [`LoadOutcome::ParseError`] with the serde message so we never
+/// silently collapse a malformed board into an empty one.
+fn parse_localstorage_board(json: &str) -> LoadOutcome {
+    if json.trim().is_empty() {
+        return LoadOutcome::Absent;
+    }
+    match serde_json::from_str::<Board>(json) {
+        Ok(board) => LoadOutcome::Loaded(board),
+        Err(e) => LoadOutcome::ParseError(e.to_string()),
+    }
+}
+
+async fn load_board_storage() -> LoadOutcome {
     if is_tauri() {
         let result = invoke("load_board", JsValue::NULL).await;
-        serde_wasm_bindgen::from_value::<Board>(result).unwrap_or_default()
+        // The backend returns `Board::default()` (empty nodes/edges) when no file
+        // exists. A genuine parse error here means the JS value the backend handed
+        // back is not a Board shape — keep the existing board rather than blanking it.
+        match serde_wasm_bindgen::from_value::<Board>(result) {
+            Ok(board) => LoadOutcome::Loaded(board),
+            Err(e) => LoadOutcome::ParseError(e.to_string()),
+        }
     } else {
-        web_sys::window()
+        match web_sys::window()
             .and_then(|w| w.local_storage().ok().flatten())
             .and_then(|storage| storage.get_item(LOCALSTORAGE_KEY).ok().flatten())
-            .and_then(|json| serde_json::from_str::<Board>(&json).ok())
-            .unwrap_or_default()
+        {
+            Some(json) => parse_localstorage_board(&json),
+            None => LoadOutcome::Absent,
+        }
+    }
+}
+
+/// Fill in zero `width`/`height` on freshly-loaded nodes using text-based auto-sizing.
+fn auto_size_nodes(board: &mut Board) {
+    for node in &mut board.nodes {
+        if node.width == 0.0 || node.height == 0.0 {
+            let (w, h) = Node::auto_size(&node.text);
+            if node.width == 0.0 {
+                node.width = w;
+            }
+            if node.height == 0.0 {
+                node.height = h;
+            }
+        }
     }
 }
 
@@ -197,6 +250,9 @@ pub struct BoardCtx {
     pub md_edit_text: ReadSignal<String>,
     pub set_md_edit_text: WriteSignal<String>,
     pub md_file_cache: ReadSignal<HashMap<String, Option<String>>>,
+    /// Most recent board.json parse error (if any). Set on a failed load so the
+    /// error banner can surface it; cleared on the next successful load.
+    pub load_error: RwSignal<Option<String>>,
 }
 
 #[component]
@@ -241,6 +297,7 @@ pub fn App() -> impl IntoView {
     let (md_file_cache, set_md_file_cache) = signal::<HashMap<String, Option<String>>>(HashMap::new());
     let (image_load_trigger, set_image_load_trigger) = signal(0u32);
     let (link_preview_trigger, set_link_preview_trigger) = signal(0u32);
+    let load_error = RwSignal::<Option<String>>::new(None);
 
     provide_context(BoardCtx {
         board,
@@ -260,6 +317,7 @@ pub fn App() -> impl IntoView {
         md_edit_text,
         set_md_edit_text,
         md_file_cache,
+        load_error,
     });
 
     // Load board on startup (with small delay to ensure Tauri is ready)
@@ -267,15 +325,25 @@ pub fn App() -> impl IntoView {
         spawn_local(async move {
             // Small delay to ensure Tauri's __TAURI__ is injected
             gloo_timers::future::TimeoutFuture::new(50).await;
-            let mut loaded_board = load_board_storage().await;
-            for node in &mut loaded_board.nodes {
-                if node.width == 0.0 || node.height == 0.0 {
-                    let (w, h) = Node::auto_size(&node.text);
-                    if node.width == 0.0 { node.width = w; }
-                    if node.height == 0.0 { node.height = h; }
+            match load_board_storage().await {
+                LoadOutcome::Loaded(mut loaded_board) => {
+                    auto_size_nodes(&mut loaded_board);
+                    load_error.set(None);
+                    set_board.set(loaded_board);
+                }
+                LoadOutcome::Absent => {
+                    load_error.set(None);
+                    set_board.set(Board::default());
+                }
+                LoadOutcome::ParseError(msg) => {
+                    // Keep the existing board signal untouched so a malformed
+                    // file can't be overwritten by the next save.
+                    web_sys::console::error_1(
+                        &format!("Failed to parse board.json: {}", msg).into(),
+                    );
+                    load_error.set(Some(msg));
                 }
             }
-            set_board.set(loaded_board);
         });
     });
 
@@ -290,15 +358,25 @@ pub fn App() -> impl IntoView {
             // Only external changes reach here (backend skips our own saves)
             web_sys::console::log_1(&"External board change detected, reloading...".into());
             spawn_local(async move {
-                let mut loaded_board = load_board_storage().await;
-                for node in &mut loaded_board.nodes {
-                    if node.width == 0.0 || node.height == 0.0 {
-                        let (w, h) = Node::auto_size(&node.text);
-                        if node.width == 0.0 { node.width = w; }
-                        if node.height == 0.0 { node.height = h; }
+                match load_board_storage().await {
+                    LoadOutcome::Loaded(mut loaded_board) => {
+                        auto_size_nodes(&mut loaded_board);
+                        load_error.set(None);
+                        set_board.set(loaded_board);
+                    }
+                    LoadOutcome::Absent => {
+                        load_error.set(None);
+                        set_board.set(Board::default());
+                    }
+                    LoadOutcome::ParseError(msg) => {
+                        // Malformed external edit: keep the current board so the
+                        // next save doesn't clobber the file the user is editing.
+                        web_sys::console::error_1(
+                            &format!("Failed to parse board.json: {}", msg).into(),
+                        );
+                        load_error.set(Some(msg));
                     }
                 }
-                set_board.set(loaded_board);
             });
         });
 
@@ -1312,6 +1390,7 @@ pub fn App() -> impl IntoView {
             <MarkdownOverlays/>
             <ImageModal/>
             <MarkdownModal/>
+            <ErrorBanner/>
             <Show when=move || !is_tauri()>
                 <div style="position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; z-index: 100;">
                     <button style=button_style on:click=on_upload>"Upload board.json"</button>
@@ -1330,6 +1409,70 @@ pub fn App() -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod load_outcome_tests {
+        use super::*;
+
+        #[test]
+        fn valid_json_yields_loaded() {
+            let json = r#"{"nodes":[{"id":"n1","x":0.0,"y":0.0,"width":200.0,"height":100.0,"text":"hi","node_type":"text"}],"edges":[]}"#;
+            match parse_localstorage_board(json) {
+                LoadOutcome::Loaded(board) => {
+                    assert_eq!(board.nodes.len(), 1);
+                    assert_eq!(board.nodes[0].id, "n1");
+                }
+                other => panic!("expected Loaded, got {:?}", other),
+            }
+        }
+
+        #[test]
+        fn empty_string_yields_absent() {
+            assert!(matches!(parse_localstorage_board(""), LoadOutcome::Absent));
+            assert!(matches!(parse_localstorage_board("   \n\t "), LoadOutcome::Absent));
+        }
+
+        #[test]
+        fn malformed_json_yields_parse_error_not_empty_board() {
+            // Truncated / invalid JSON — the exact failure mode that previously
+            // collapsed into Board::default() and let the next save destroy data.
+            let malformed = r#"{"nodes": [{"id": "n1", "x": 0, "#;
+            match parse_localstorage_board(malformed) {
+                LoadOutcome::ParseError(msg) => {
+                    assert!(!msg.is_empty(), "parse error should carry a message");
+                }
+                LoadOutcome::Loaded(board) => {
+                    panic!("malformed input must not parse into a board ({} nodes)", board.nodes.len());
+                }
+                LoadOutcome::Absent => panic!("malformed (non-empty) input must not be Absent"),
+            }
+        }
+
+        #[test]
+        fn wrong_shape_json_yields_parse_error() {
+            // Valid JSON, but not a Board shape.
+            let wrong = r#"{"totally": "different", "schema": 42}"#;
+            assert!(matches!(parse_localstorage_board(wrong), LoadOutcome::ParseError(_)));
+        }
+
+        #[test]
+        fn parse_error_does_not_replace_non_empty_board() {
+            // Simulate the load path's contract: a non-empty board must survive a
+            // ParseError. We only call set_board on Loaded/Absent, never ParseError.
+            let existing = Board {
+                nodes: vec![Node::new("text".into(), 0.0, 0.0, "keep me".into())],
+                edges: vec![],
+            };
+            let outcome = parse_localstorage_board("{ broken");
+            let mut current = existing.clone();
+            match outcome {
+                LoadOutcome::Loaded(b) => current = b,
+                LoadOutcome::Absent => current = Board::default(),
+                LoadOutcome::ParseError(_) => { /* keep current untouched */ }
+            }
+            assert_eq!(current.nodes.len(), 1, "ParseError must not blank the board");
+            assert_eq!(current.nodes[0].text, "keep me");
+        }
+    }
 
     mod is_local_md_file_tests {
         use super::*;

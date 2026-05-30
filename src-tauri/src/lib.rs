@@ -33,7 +33,236 @@ fn content_hash(content: &str) -> u64 {
     hasher.finish()
 }
 
-pub use brainstorm_types::{Board, Edge, LinkPreview, Node, NodeType};
+pub use brainstorm_types::{
+    Board, Edge, LinkPreview, Node, NodeType, ValidationError, CURRENT_BOARD_VERSION,
+};
+
+/// Outcome of validating a board file's raw text: the structural errors from
+/// [`Board::validate`] plus any unrecognized top-level keys (forward-compat
+/// warnings). Returned by [`validate_board_text`] so the CLI can print both and
+/// pick an exit code. A board is "clean" when both lists are empty.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidationReport {
+    pub errors: Vec<ValidationError>,
+    pub unknown_keys: Vec<String>,
+}
+
+impl ValidationReport {
+    /// True when the board has no *fatal* structural errors. Forward-compat
+    /// findings — unknown top-level keys and a future schema version
+    /// ([`ValidationError::is_warning`]) — are warnings, not failures, so they do
+    /// NOT make the report unclean.
+    pub fn is_clean(&self) -> bool {
+        !self.errors.iter().any(|e| !e.is_warning())
+    }
+
+    /// The fatal (non-warning) errors only — what makes `validate` exit non-zero.
+    pub fn fatal_errors(&self) -> impl Iterator<Item = &ValidationError> {
+        self.errors.iter().filter(|e| !e.is_warning())
+    }
+
+    /// The non-fatal warnings from validation (e.g. a future schema version).
+    pub fn warnings(&self) -> impl Iterator<Item = &ValidationError> {
+        self.errors.iter().filter(|e| e.is_warning())
+    }
+}
+
+/// Return the top-level object keys that are not part of the known board schema
+/// (`version`, `nodes`, `edges`). Serde silently ignores extra keys at
+/// deserialize time; this lets the validator *warn* about them so a typo'd or
+/// future key is visible rather than swallowed. Non-object JSON yields an empty
+/// list (the structural parse error is surfaced elsewhere). Pure + testable.
+pub fn unknown_top_level_keys(raw: &str) -> Vec<String> {
+    const KNOWN: [&str; 3] = ["version", "nodes", "edges"];
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(serde_json::Value::Object(map)) => map
+            .keys()
+            .filter(|k| !KNOWN.contains(&k.as_str()))
+            .cloned()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Validate a board from its raw JSON text. Parses the board, runs
+/// [`Board::validate`], and additionally flags unknown top-level keys. Returns
+/// `Err` only when the text fails to parse as a board at all (the caller turns
+/// that into a non-zero exit). Pure (no IO) so it is unit-tested directly.
+pub fn validate_board_text(raw: &str) -> Result<ValidationReport, String> {
+    let board: Board = serde_json::from_str(raw).map_err(|e| format!("invalid board JSON: {e}"))?;
+    Ok(ValidationReport {
+        errors: board.validate(),
+        unknown_keys: unknown_top_level_keys(raw),
+    })
+}
+
+/// Evaluate a small read-only query expression against a board and return a
+/// human-readable result. Pure + testable; powers `brainstorm query <expr>`.
+///
+/// Supported expressions:
+/// - `count`                  — node and edge counts
+/// - `nodes`                  — every node id + type + first line of text
+/// - `edges`                  — every edge id + `from -> to` (+ label)
+/// - `node:<id>`              — full detail for one node (errors if missing)
+/// - `type:<node_type>`       — node ids whose `node_type` matches
+/// - `tag:<tag>`              — node ids carrying `<tag>`
+/// - `status:<status>`        — node ids whose `status` matches
+/// - `group:<group>`          — node ids in `<group>`
+/// - `priority:<n>`           — node ids with priority `<n>`
+///
+/// An unrecognized expression returns `Err` with the list of supported forms.
+pub fn query_board(board: &Board, expr: &str) -> Result<String, String> {
+    let expr = expr.trim();
+
+    // Short, single-line summary of a node for list output.
+    let node_summary = |n: &Node| -> String {
+        let first_line = n.text.lines().next().unwrap_or("").trim();
+        format!("{}  [{}]  {}", n.id, n.node_type.as_str(), first_line)
+    };
+
+    // Helper: render a filtered list of node ids, or a "no matches" line.
+    let render_ids = |label: &str, ids: Vec<String>| -> String {
+        if ids.is_empty() {
+            format!("no nodes match {label}")
+        } else {
+            format!("{} node(s):\n{}", ids.len(), ids.join("\n"))
+        }
+    };
+
+    if let Some((key, value)) = expr.split_once(':') {
+        let value = value.trim();
+        return match key.trim() {
+            "node" => board
+                .nodes
+                .iter()
+                .find(|n| n.id == value)
+                .map(|n| {
+                    let mut out = format!(
+                        "id: {}\ntype: {}\npos: ({}, {})\nsize: {} x {}\ntext: {}",
+                        n.id,
+                        n.node_type.as_str(),
+                        n.x,
+                        n.y,
+                        n.width,
+                        n.height,
+                        n.text
+                    );
+                    if let Some(c) = &n.color {
+                        out.push_str(&format!("\ncolor: {c}"));
+                    }
+                    if !n.tags.is_empty() {
+                        out.push_str(&format!("\ntags: {}", n.tags.join(", ")));
+                    }
+                    if let Some(s) = &n.status {
+                        out.push_str(&format!("\nstatus: {s}"));
+                    }
+                    if let Some(g) = &n.group {
+                        out.push_str(&format!("\ngroup: {g}"));
+                    }
+                    if let Some(p) = n.priority {
+                        out.push_str(&format!("\npriority: {p}"));
+                    }
+                    out
+                })
+                .ok_or_else(|| format!("no node with id '{value}'")),
+            "type" => Ok(render_ids(
+                &format!("type:{value}"),
+                board
+                    .nodes
+                    .iter()
+                    .filter(|n| n.node_type.as_str() == value)
+                    .map(|n| n.id.clone())
+                    .collect(),
+            )),
+            "tag" => Ok(render_ids(
+                &format!("tag:{value}"),
+                board
+                    .nodes
+                    .iter()
+                    .filter(|n| n.tags.iter().any(|t| t == value))
+                    .map(|n| n.id.clone())
+                    .collect(),
+            )),
+            "status" => Ok(render_ids(
+                &format!("status:{value}"),
+                board
+                    .nodes
+                    .iter()
+                    .filter(|n| n.status.as_deref() == Some(value))
+                    .map(|n| n.id.clone())
+                    .collect(),
+            )),
+            "group" => Ok(render_ids(
+                &format!("group:{value}"),
+                board
+                    .nodes
+                    .iter()
+                    .filter(|n| n.group.as_deref() == Some(value))
+                    .map(|n| n.id.clone())
+                    .collect(),
+            )),
+            "priority" => {
+                let p: u8 = value
+                    .parse()
+                    .map_err(|_| format!("priority must be a number, got '{value}'"))?;
+                Ok(render_ids(
+                    &format!("priority:{p}"),
+                    board
+                        .nodes
+                        .iter()
+                        .filter(|n| n.priority == Some(p))
+                        .map(|n| n.id.clone())
+                        .collect(),
+                ))
+            }
+            other => Err(query_usage(other)),
+        };
+    }
+
+    match expr {
+        "count" => Ok(format!(
+            "{} node(s), {} edge(s)",
+            board.nodes.len(),
+            board.edges.len()
+        )),
+        "nodes" => {
+            if board.nodes.is_empty() {
+                Ok("0 nodes".to_string())
+            } else {
+                Ok(board
+                    .nodes
+                    .iter()
+                    .map(node_summary)
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+        }
+        "edges" => {
+            if board.edges.is_empty() {
+                Ok("0 edges".to_string())
+            } else {
+                Ok(board
+                    .edges
+                    .iter()
+                    .map(|e| match &e.label {
+                        Some(l) => format!("{}: {} -> {} ({})", e.id, e.from_node, e.to_node, l),
+                        None => format!("{}: {} -> {}", e.id, e.from_node, e.to_node),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+        }
+        other => Err(query_usage(other)),
+    }
+}
+
+/// Build the "unsupported query" error message listing every accepted form.
+fn query_usage(got: &str) -> String {
+    format!(
+        "unsupported query '{got}'. Supported: count | nodes | edges | node:<id> | \
+type:<node_type> | tag:<tag> | status:<status> | group:<group> | priority:<n>"
+    )
+}
 
 /// Resolve the path to the active `board.json`, anchored on the process's
 /// current working directory.
@@ -59,6 +288,14 @@ fn get_board_path() -> Result<PathBuf, String> {
         cwd.join("board.json")
     };
     Ok(path)
+}
+
+/// Public resolver for the active `board.json` path, used by the CLI
+/// (`brainstorm validate`/`query` with no explicit path argument). Delegates to
+/// the same cwd-anchored logic the Tauri commands use so the CLI and GUI agree
+/// on which board file is "the" board.
+pub fn default_board_path() -> Result<PathBuf, String> {
+    get_board_path()
 }
 
 /// Pure IO core for loading a board from a concrete path. Kept free of
@@ -876,6 +1113,171 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod cli_tests {
+        use super::*;
+
+        fn node(id: &str, text: &str) -> Node {
+            Node::new(id.to_string(), 0.0, 0.0, text.to_string())
+        }
+
+        fn sample() -> Board {
+            let mut idea = node("a", "Pricing idea");
+            idea.node_type = NodeType::Idea;
+            idea.tags = vec!["urgent".to_string()];
+            idea.status = Some("todo".to_string());
+            idea.group = Some("g1".to_string());
+            idea.priority = Some(2);
+            Board {
+                version: None,
+                nodes: vec![idea, node("b", "Second\nmultiline")],
+                edges: vec![Edge {
+                    id: "e1".to_string(),
+                    from_node: "a".to_string(),
+                    to_node: "b".to_string(),
+                    label: Some("relates".to_string()),
+                }],
+            }
+        }
+
+        #[test]
+        fn validate_clean_board_is_ok() {
+            let raw = serde_json::to_string(&sample()).unwrap();
+            let report = validate_board_text(&raw).unwrap();
+            assert!(report.is_clean());
+            assert!(report.unknown_keys.is_empty());
+        }
+
+        #[test]
+        fn validate_dangling_edge_board_reports_offending_id() {
+            // An edge references a node id that does not exist.
+            let raw = r#"{"nodes":[{"id":"a","x":0,"y":0,"text":"A","node_type":"text"}],
+                "edges":[{"id":"bad-edge","from_node":"a","to_node":"ghost"}]}"#;
+            let report = validate_board_text(raw).unwrap();
+            assert!(!report.is_clean());
+            assert!(report.errors.contains(&ValidationError::DanglingEdge {
+                edge_id: "bad-edge".to_string(),
+                missing_node: "ghost".to_string(),
+            }));
+        }
+
+        #[test]
+        fn validate_rejects_unparseable_text() {
+            assert!(validate_board_text("{ not json ]").is_err());
+        }
+
+        #[test]
+        fn unknown_top_level_keys_flagged() {
+            let raw = r#"{"nodes":[],"edges":[],"theme":"dark","extra":1}"#;
+            let mut keys = unknown_top_level_keys(raw);
+            keys.sort();
+            assert_eq!(keys, vec!["extra".to_string(), "theme".to_string()]);
+        }
+
+        #[test]
+        fn known_keys_not_flagged() {
+            let raw = r#"{"version":1,"nodes":[],"edges":[]}"#;
+            assert!(unknown_top_level_keys(raw).is_empty());
+        }
+
+        #[test]
+        fn unknown_keys_do_not_make_report_unclean() {
+            let raw = r#"{"nodes":[],"edges":[],"future":true}"#;
+            let report = validate_board_text(raw).unwrap();
+            assert!(report.is_clean(), "unknown keys are warnings, not errors");
+            assert_eq!(report.unknown_keys, vec!["future".to_string()]);
+        }
+
+        #[test]
+        fn future_version_is_a_warning_not_a_fatal_error() {
+            // A board declaring a newer schema version validates "clean" (exit 0):
+            // it is surfaced as a warning, not a rejection (forward-compat).
+            let raw = format!(
+                r#"{{"version":{},"nodes":[],"edges":[]}}"#,
+                CURRENT_BOARD_VERSION + 1
+            );
+            let report = validate_board_text(&raw).unwrap();
+            assert!(report.is_clean(), "future version must not be fatal");
+            assert_eq!(report.fatal_errors().count(), 0);
+            assert_eq!(report.warnings().count(), 1);
+        }
+
+        #[test]
+        fn query_count() {
+            assert_eq!(
+                query_board(&sample(), "count").unwrap(),
+                "2 node(s), 1 edge(s)"
+            );
+        }
+
+        #[test]
+        fn query_nodes_lists_each() {
+            let out = query_board(&sample(), "nodes").unwrap();
+            assert!(out.contains("a  [idea]  Pricing idea"));
+            // Multiline text shows only the first line.
+            assert!(out.contains("b  [text]  Second"));
+            assert!(!out.contains("multiline"));
+        }
+
+        #[test]
+        fn query_edges_includes_label() {
+            let out = query_board(&sample(), "edges").unwrap();
+            assert_eq!(out, "e1: a -> b (relates)");
+        }
+
+        #[test]
+        fn query_node_detail() {
+            let out = query_board(&sample(), "node:a").unwrap();
+            assert!(out.contains("id: a"));
+            assert!(out.contains("type: idea"));
+            assert!(out.contains("tags: urgent"));
+            assert!(out.contains("status: todo"));
+            assert!(out.contains("priority: 2"));
+        }
+
+        #[test]
+        fn query_node_missing_errors() {
+            assert!(query_board(&sample(), "node:nope").is_err());
+        }
+
+        #[test]
+        fn query_type_filter() {
+            let out = query_board(&sample(), "type:idea").unwrap();
+            assert!(out.contains("a"));
+            assert!(!out.contains("\nb"));
+        }
+
+        #[test]
+        fn query_tag_filter() {
+            let out = query_board(&sample(), "tag:urgent").unwrap();
+            assert!(out.contains("a"));
+        }
+
+        #[test]
+        fn query_status_and_group_and_priority() {
+            assert!(query_board(&sample(), "status:todo").unwrap().contains("a"));
+            assert!(query_board(&sample(), "group:g1").unwrap().contains("a"));
+            assert!(query_board(&sample(), "priority:2").unwrap().contains("a"));
+        }
+
+        #[test]
+        fn query_no_match_message() {
+            let out = query_board(&sample(), "tag:missing").unwrap();
+            assert!(out.contains("no nodes match"));
+        }
+
+        #[test]
+        fn query_bad_priority_value_errors() {
+            assert!(query_board(&sample(), "priority:notanumber").is_err());
+        }
+
+        #[test]
+        fn query_unsupported_expr_errors() {
+            let err = query_board(&sample(), "bogus").unwrap_err();
+            assert!(err.contains("unsupported query"));
+            assert!(err.contains("count"));
+        }
+    }
 
     mod read_markdown_file_tests {
         use super::*;

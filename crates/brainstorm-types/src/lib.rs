@@ -90,13 +90,196 @@ impl std::str::FromStr for NodeType {
     }
 }
 
+/// The current on-disk board schema version. A board with no explicit `version`
+/// key (every board written before this field existed) is treated as the current
+/// version: the field is optional and `None`-means-current, so old files keep
+/// loading unchanged and re-serialize without gaining a `version` key.
+pub const CURRENT_BOARD_VERSION: u32 = 1;
+
+/// A single problem found by [`Board::validate`]. Each variant carries the
+/// offending id(s) so callers (the CLI, the watcher) can report precisely which
+/// node or edge is at fault. `Display` renders a one-line human message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ValidationError {
+    /// Two or more nodes share the same `id`.
+    DuplicateNodeId(String),
+    /// Two or more edges share the same `id`.
+    DuplicateEdgeId(String),
+    /// An edge references a `from_node`/`to_node` id that no node has (dangling).
+    DanglingEdge {
+        edge_id: String,
+        missing_node: String,
+    },
+    /// A node coordinate or dimension is NaN or infinite, which would break
+    /// rendering and camera math.
+    NonFiniteCoord { node_id: String, field: String },
+    /// A node `priority` is outside the documented 1..=5 range.
+    PriorityOutOfRange { node_id: String, priority: u8 },
+    /// A board declares a schema `version` newer than this build understands.
+    /// Non-fatal: surfaced as a forward-compat warning, not a rejection.
+    UnknownVersion(u32),
+}
+
+impl ValidationError {
+    /// Whether this finding is a non-fatal forward-compatibility *warning* rather
+    /// than a hard structural error. Currently only [`ValidationError::UnknownVersion`]
+    /// is a warning: a board declaring a future schema version still loads (we
+    /// surface it so it's visible), whereas duplicate/dangling/invalid data are
+    /// real errors that should fail `brainstorm validate`.
+    pub fn is_warning(&self) -> bool {
+        matches!(self, ValidationError::UnknownVersion(_))
+    }
+}
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValidationError::DuplicateNodeId(id) => {
+                write!(f, "duplicate node id: {id}")
+            }
+            ValidationError::DuplicateEdgeId(id) => {
+                write!(f, "duplicate edge id: {id}")
+            }
+            ValidationError::DanglingEdge {
+                edge_id,
+                missing_node,
+            } => write!(
+                f,
+                "dangling edge {edge_id}: references missing node {missing_node}"
+            ),
+            ValidationError::NonFiniteCoord { node_id, field } => {
+                write!(f, "node {node_id}: non-finite {field}")
+            }
+            ValidationError::PriorityOutOfRange { node_id, priority } => write!(
+                f,
+                "node {node_id}: priority {priority} out of range (expected 1-5)"
+            ),
+            ValidationError::UnknownVersion(v) => write!(
+                f,
+                "board version {v} is newer than this build (supports {CURRENT_BOARD_VERSION})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Board {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
 }
 
 impl Board {
+    /// The board's effective schema version. A `None` (absent) `version` key
+    /// means the board predates versioning and is treated as the current
+    /// version, so old files validate clean and migration logic can branch on a
+    /// concrete number.
+    pub fn schema_version(&self) -> u32 {
+        self.version.unwrap_or(CURRENT_BOARD_VERSION)
+    }
+
+    /// Structurally validate the board, returning every problem found (empty Vec
+    /// == clean). Pure and side-effect-free so it can run anywhere — the CLI
+    /// (`brainstorm validate`), the file-watcher reload path, or tests.
+    ///
+    /// Detects, in order:
+    /// - duplicate node ids
+    /// - duplicate edge ids
+    /// - dangling edges (an endpoint references a node id that does not exist)
+    /// - non-finite node coordinates/dimensions (NaN/inf)
+    /// - out-of-range node priority (outside 1..=5)
+    /// - an unknown (future) schema version — reported as a non-fatal warning
+    ///
+    /// Forward-compatibility note: unknown *keys* are silently ignored by serde
+    /// at deserialize time (we never reject a board for carrying extra fields).
+    /// A future *version number* is reported here as `UnknownVersion` so callers
+    /// can warn without refusing to load.
+    pub fn validate(&self) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
+
+        // Future-version warning (non-fatal). Only a version strictly newer than
+        // what we understand is flagged; a missing version is current.
+        if self.schema_version() > CURRENT_BOARD_VERSION {
+            errors.push(ValidationError::UnknownVersion(self.schema_version()));
+        }
+
+        // Duplicate node ids, and collect the set of known ids for the dangling
+        // check below.
+        let mut seen_node_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut node_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for node in &self.nodes {
+            node_ids.insert(node.id.as_str());
+            if !seen_node_ids.insert(node.id.as_str()) {
+                errors.push(ValidationError::DuplicateNodeId(node.id.clone()));
+            }
+
+            // Non-finite coordinates / dimensions.
+            for (field, value) in [
+                ("x", node.x),
+                ("y", node.y),
+                ("width", node.width),
+                ("height", node.height),
+            ] {
+                if !value.is_finite() {
+                    errors.push(ValidationError::NonFiniteCoord {
+                        node_id: node.id.clone(),
+                        field: field.to_string(),
+                    });
+                }
+            }
+
+            // Out-of-range priority (documented as 1..=5).
+            if let Some(p) = node.priority {
+                if !(1..=5).contains(&p) {
+                    errors.push(ValidationError::PriorityOutOfRange {
+                        node_id: node.id.clone(),
+                        priority: p,
+                    });
+                }
+            }
+        }
+
+        // Duplicate edge ids + dangling endpoints.
+        let mut seen_edge_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for edge in &self.edges {
+            if !seen_edge_ids.insert(edge.id.as_str()) {
+                errors.push(ValidationError::DuplicateEdgeId(edge.id.clone()));
+            }
+            for endpoint in [&edge.from_node, &edge.to_node] {
+                if !node_ids.contains(endpoint.as_str()) {
+                    errors.push(ValidationError::DanglingEdge {
+                        edge_id: edge.id.clone(),
+                        missing_node: endpoint.clone(),
+                    });
+                }
+            }
+        }
+
+        errors
+    }
+
+    /// Drop every edge whose `from_node` or `to_node` references a non-existent
+    /// node, returning the ids of the edges removed. Used on the non-destructive
+    /// reload path: rather than silently rendering nothing for a dangling edge
+    /// (which looks like a bug), the UI removes it from the in-memory board and
+    /// warns. The on-disk file is untouched until the next save.
+    pub fn drop_dangling_edges(&mut self) -> Vec<String> {
+        let node_ids: std::collections::HashSet<&str> =
+            self.nodes.iter().map(|n| n.id.as_str()).collect();
+        let mut dropped = Vec::new();
+        self.edges.retain(|edge| {
+            let ok = node_ids.contains(edge.from_node.as_str())
+                && node_ids.contains(edge.to_node.as_str());
+            if !ok {
+                dropped.push(edge.id.clone());
+            }
+            ok
+        });
+        dropped
+    }
     /// Fill in zero `width`/`height` on freshly-loaded nodes using text-based
     /// auto-sizing. Agents (and hand-edited `board.json` files) may omit the
     /// dimensions entirely; `#[serde(default)]` deserializes those to `0.0`,
@@ -568,6 +751,7 @@ mod tests {
         #[test]
         fn serde_round_trip() {
             let board = Board {
+                version: None,
                 nodes: vec![
                     Node::new("n1".to_string(), 0.0, 0.0, "First".to_string()),
                     Node {
@@ -656,6 +840,7 @@ mod tests {
         #[test]
         fn apply_auto_size_preserves_explicit_dimensions() {
             let mut board = Board {
+                version: None,
                 nodes: vec![Node {
                     id: "n1".to_string(),
                     x: 0.0,
@@ -684,6 +869,7 @@ mod tests {
         fn apply_auto_size_fills_only_missing_axis() {
             // Width supplied, height omitted (0.0): only height is computed.
             let mut board = Board {
+                version: None,
                 nodes: vec![Node {
                     id: "n1".to_string(),
                     x: 0.0,
@@ -773,6 +959,7 @@ mod tests {
         #[test]
         fn serialize_produces_valid_json() {
             let board = Board {
+                version: None,
                 nodes: vec![Node {
                     id: "test".to_string(),
                     x: 100.0,
@@ -794,6 +981,257 @@ mod tests {
             assert!(json.contains("\"id\": \"test\""));
             assert!(json.contains("\"x\": 100.0"));
             assert!(json.contains("Hello \\\"world\\\""));
+        }
+    }
+
+    mod validation_tests {
+        use super::*;
+
+        fn node(id: &str) -> Node {
+            Node::new(id.to_string(), 0.0, 0.0, "n".to_string())
+        }
+
+        fn edge(id: &str, from: &str, to: &str) -> Edge {
+            Edge {
+                id: id.to_string(),
+                from_node: from.to_string(),
+                to_node: to.to_string(),
+                label: None,
+            }
+        }
+
+        #[test]
+        fn clean_board_returns_no_errors() {
+            let board = Board {
+                version: None,
+                nodes: vec![node("a"), node("b")],
+                edges: vec![edge("e1", "a", "b")],
+            };
+            assert!(board.validate().is_empty(), "{:?}", board.validate());
+        }
+
+        #[test]
+        fn empty_board_is_clean() {
+            assert!(Board::default().validate().is_empty());
+        }
+
+        #[test]
+        fn detects_duplicate_node_id() {
+            let board = Board {
+                version: None,
+                nodes: vec![node("dup"), node("dup")],
+                edges: vec![],
+            };
+            let errs = board.validate();
+            assert!(errs.contains(&ValidationError::DuplicateNodeId("dup".to_string())));
+        }
+
+        #[test]
+        fn detects_duplicate_edge_id() {
+            let board = Board {
+                version: None,
+                nodes: vec![node("a"), node("b")],
+                edges: vec![edge("e", "a", "b"), edge("e", "b", "a")],
+            };
+            let errs = board.validate();
+            assert!(errs.contains(&ValidationError::DuplicateEdgeId("e".to_string())));
+        }
+
+        #[test]
+        fn detects_dangling_from_node() {
+            let board = Board {
+                version: None,
+                nodes: vec![node("a")],
+                edges: vec![edge("e1", "ghost", "a")],
+            };
+            let errs = board.validate();
+            assert!(errs.contains(&ValidationError::DanglingEdge {
+                edge_id: "e1".to_string(),
+                missing_node: "ghost".to_string(),
+            }));
+        }
+
+        #[test]
+        fn detects_dangling_to_node() {
+            let board = Board {
+                version: None,
+                nodes: vec![node("a")],
+                edges: vec![edge("e1", "a", "ghost")],
+            };
+            let errs = board.validate();
+            assert!(errs.contains(&ValidationError::DanglingEdge {
+                edge_id: "e1".to_string(),
+                missing_node: "ghost".to_string(),
+            }));
+        }
+
+        #[test]
+        fn detects_non_finite_coords() {
+            let mut n = node("a");
+            n.x = f64::NAN;
+            n.height = f64::INFINITY;
+            let board = Board {
+                version: None,
+                nodes: vec![n],
+                edges: vec![],
+            };
+            let errs = board.validate();
+            assert!(errs.contains(&ValidationError::NonFiniteCoord {
+                node_id: "a".to_string(),
+                field: "x".to_string(),
+            }));
+            assert!(errs.contains(&ValidationError::NonFiniteCoord {
+                node_id: "a".to_string(),
+                field: "height".to_string(),
+            }));
+        }
+
+        #[test]
+        fn detects_priority_out_of_range() {
+            let mut low = node("a");
+            low.priority = Some(0);
+            let mut high = node("b");
+            high.priority = Some(9);
+            let board = Board {
+                version: None,
+                nodes: vec![low, high],
+                edges: vec![],
+            };
+            let errs = board.validate();
+            assert!(errs.contains(&ValidationError::PriorityOutOfRange {
+                node_id: "a".to_string(),
+                priority: 0,
+            }));
+            assert!(errs.contains(&ValidationError::PriorityOutOfRange {
+                node_id: "b".to_string(),
+                priority: 9,
+            }));
+        }
+
+        #[test]
+        fn valid_priorities_pass() {
+            for p in 1..=5u8 {
+                let mut n = node("a");
+                n.priority = Some(p);
+                let board = Board {
+                    version: None,
+                    nodes: vec![n],
+                    edges: vec![],
+                };
+                assert!(board.validate().is_empty(), "priority {p} should be valid");
+            }
+        }
+
+        #[test]
+        fn future_version_warns_but_is_not_fatal_for_other_checks() {
+            let board = Board {
+                version: Some(CURRENT_BOARD_VERSION + 1),
+                nodes: vec![node("a"), node("b")],
+                edges: vec![edge("e1", "a", "b")],
+            };
+            let errs = board.validate();
+            assert_eq!(
+                errs,
+                vec![ValidationError::UnknownVersion(CURRENT_BOARD_VERSION + 1)]
+            );
+        }
+
+        #[test]
+        fn current_and_absent_version_do_not_warn() {
+            let with = Board {
+                version: Some(CURRENT_BOARD_VERSION),
+                nodes: vec![],
+                edges: vec![],
+            };
+            assert!(with.validate().is_empty());
+            assert!(Board::default().validate().is_empty());
+        }
+
+        #[test]
+        fn schema_version_defaults_to_current_when_absent() {
+            assert_eq!(Board::default().schema_version(), CURRENT_BOARD_VERSION);
+            let b = Board {
+                version: Some(7),
+                nodes: vec![],
+                edges: vec![],
+            };
+            assert_eq!(b.schema_version(), 7);
+        }
+
+        #[test]
+        fn drop_dangling_edges_removes_only_dangling() {
+            let mut board = Board {
+                version: None,
+                nodes: vec![node("a"), node("b")],
+                edges: vec![
+                    edge("good", "a", "b"),
+                    edge("bad1", "a", "ghost"),
+                    edge("bad2", "ghost", "b"),
+                ],
+            };
+            let dropped = board.drop_dangling_edges();
+            assert_eq!(dropped, vec!["bad1".to_string(), "bad2".to_string()]);
+            assert_eq!(board.edges.len(), 1);
+            assert_eq!(board.edges[0].id, "good");
+            // After dropping, the board validates clean.
+            assert!(board.validate().is_empty());
+        }
+
+        #[test]
+        fn drop_dangling_edges_noop_on_clean_board() {
+            let mut board = Board {
+                version: None,
+                nodes: vec![node("a"), node("b")],
+                edges: vec![edge("e1", "a", "b")],
+            };
+            assert!(board.drop_dangling_edges().is_empty());
+            assert_eq!(board.edges.len(), 1);
+        }
+
+        #[test]
+        fn version_absent_is_not_serialized() {
+            // A board with no explicit version must not gain a `version` key on
+            // serialize — old files round-trip byte-stably.
+            let board = Board::default();
+            let json = serde_json::to_string(&board).unwrap();
+            assert!(!json.contains("version"));
+        }
+
+        #[test]
+        fn explicit_version_round_trips() {
+            let board = Board {
+                version: Some(1),
+                nodes: vec![],
+                edges: vec![],
+            };
+            let json = serde_json::to_string(&board).unwrap();
+            assert!(json.contains("\"version\":1"));
+            let parsed: Board = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed.version, Some(1));
+        }
+
+        #[test]
+        fn deserialize_old_board_without_version() {
+            let json = r#"{"nodes":[],"edges":[]}"#;
+            let board: Board = serde_json::from_str(json).unwrap();
+            assert_eq!(board.version, None);
+            assert_eq!(board.schema_version(), CURRENT_BOARD_VERSION);
+        }
+
+        #[test]
+        fn validation_error_display_messages() {
+            assert_eq!(
+                ValidationError::DuplicateNodeId("x".to_string()).to_string(),
+                "duplicate node id: x"
+            );
+            assert_eq!(
+                ValidationError::DanglingEdge {
+                    edge_id: "e1".to_string(),
+                    missing_node: "ghost".to_string(),
+                }
+                .to_string(),
+                "dangling edge e1: references missing node ghost"
+            );
         }
     }
 
@@ -1067,6 +1505,7 @@ mod tests {
                 .collect();
 
             let board = Board {
+                version: None,
                 nodes,
                 edges: vec![],
             };
@@ -1094,7 +1533,7 @@ mod tests {
                 })
                 .collect();
 
-            let board = Board { nodes, edges };
+            let board = Board { version: None, nodes, edges };
 
             assert_eq!(board.edges.len(), 99);
 
@@ -1124,7 +1563,7 @@ mod tests {
                 }
             }
 
-            let board = Board { nodes, edges };
+            let board = Board { version: None, nodes, edges };
 
             let expected_edges = n * (n - 1) / 2;
             assert_eq!(board.edges.len(), expected_edges);
@@ -1152,7 +1591,7 @@ mod tests {
                 priority: None,
             };
 
-            let board = Board { nodes: vec![node], edges: vec![] };
+            let board = Board { version: None, nodes: vec![node], edges: vec![] };
             let json = serde_json::to_string(&board).unwrap();
             let deserialized: Board = serde_json::from_str(&json).unwrap();
 

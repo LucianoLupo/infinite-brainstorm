@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://infinite-brainstorm/board.schema.json",
+  "title": "Infinite Brainstorm board.json",
+  "description": "Schema for the agent-native infinite canvas board file. Validate with `brainstorm validate ./board.json`.",
+  "type": "object",
+  "required": ["nodes", "edges"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional schema version. Absent means current (1). A version newer than the running build is loaded with a warning (forward-compatible)."
+    },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/edge" }
+    }
+  },
+  "definitions": {
+    "node": {
+      "type": "object",
+      "required": ["id", "x", "y", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique node identifier (UUID recommended). Must be unique across all nodes."
+        },
+        "x": {
+          "type": "number",
+          "description": "World-space X of the node's top-left corner. Must be finite."
+        },
+        "y": {
+          "type": "number",
+          "description": "World-space Y of the node's top-left corner. Must be finite."
+        },
+        "width": {
+          "type": "number",
+          "default": 0,
+          "description": "Node width. 0 (or omitted) triggers auto-size on load based on text."
+        },
+        "height": {
+          "type": "number",
+          "default": 0,
+          "description": "Node height. 0 (or omitted) triggers auto-size on load based on text."
+        },
+        "text": {
+          "type": "string",
+          "description": "Node content. For image/link nodes this is a path or URL; for md nodes it is markdown."
+        },
+        "node_type": {
+          "type": "string",
+          "default": "text",
+          "enum": ["text", "idea", "note", "image", "md", "link"],
+          "description": "Visual/behavioral kind. Unknown values load as a neutral fallback (forward-compatible)."
+        },
+        "color": {
+          "type": "string",
+          "description": "Optional border color override (hex, e.g. #ff6600)."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Optional freeform tags for categorization."
+        },
+        "status": {
+          "type": "string",
+          "description": "Optional workflow status (e.g. todo, in-progress, done)."
+        },
+        "group": {
+          "type": "string",
+          "description": "Optional group id. Nodes sharing a group render inside one bounding box."
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Optional priority 1-5, rendered as P1-P5."
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": ["id", "from_node", "to_node"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique edge identifier. Must be unique across all edges."
+        },
+        "from_node": {
+          "type": "string",
+          "description": "Source node id. Must reference an existing node."
+        },
+        "to_node": {
+          "type": "string",
+          "description": "Target node id. Must reference an existing node."
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional relationship label rendered at the edge midpoint (e.g. 'depends on', 'blocks')."
+        }
+      }
+    }
+  }
+}

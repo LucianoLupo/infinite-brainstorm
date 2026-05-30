@@ -36,13 +36,20 @@ brainstorm /path/to/dir # Specific directory
     {
       "id": "edge-uuid",
       "from_node": "source-node-id",
-      "to_node": "target-node-id"
+      "to_node": "target-node-id",
+      "label": "depends on"
     }
   ]
 }
 ```
 
 **Edges are directed** — rendered as arrows from `from_node` to `to_node`. The line clips to node borders with an arrowhead at the target. Use edge direction to represent flows, dependencies, or hierarchies.
+
+**Edge `label` (optional)** — a short relationship string (e.g. `"depends on"`, `"blocks"`, `"related to"`) rendered at the edge midpoint in a background pill. Omit the field for an unlabeled edge.
+
+**Board `version` (optional)** — an integer schema version. Omit it for the current format; a future, newer version still loads (with a console warning) so boards stay forward-compatible.
+
+Full JSON Schema: [board.schema.json](board.schema.json).
 
 ## Node Types
 
@@ -177,6 +184,27 @@ When creating boards from scratch, read the relevant template file, replace plac
 ### Read the board
 ```bash
 cat ./board.json
+```
+
+### Validate a board (headless)
+Catch duplicate ids, dangling edges, non-finite coordinates, and out-of-range priorities before they cause silent render bugs. Exits non-zero (with the offending id) when any structural error is found.
+```bash
+brainstorm validate              # validates ./board.json
+brainstorm validate path/to/board.json
+```
+
+### Query a board (headless)
+Inspect a board without opening the UI. Read-only; prints to stdout.
+```bash
+brainstorm query count           # node/edge counts
+brainstorm query nodes           # id + type + first line of each node
+brainstorm query edges           # id + from -> to (+ label)
+brainstorm query node:<id>       # full detail for one node
+brainstorm query type:idea       # node ids of a given type
+brainstorm query tag:urgent      # node ids carrying a tag
+brainstorm query status:done     # node ids with a status
+brainstorm query group:cluster-a # node ids in a group
+brainstorm query priority:1      # node ids at a priority
 ```
 
 ### Create a mind map

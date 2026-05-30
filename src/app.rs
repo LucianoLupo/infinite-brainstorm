@@ -101,6 +101,19 @@ async fn reload_board_into(
     match load_board_storage().await {
         LoadOutcome::Loaded(mut loaded_board) => {
             loaded_board.apply_auto_size();
+            // Non-destructive validation: warn (don't reject) on a future schema
+            // version or structural problems, and drop edges that reference a
+            // missing node so they don't silently fail to render. The on-disk
+            // file is left untouched until the next save.
+            for err in loaded_board.validate() {
+                web_sys::console::warn_1(&format!("board.json validation: {}", err).into());
+            }
+            let dropped = loaded_board.drop_dangling_edges();
+            for edge_id in &dropped {
+                web_sys::console::warn_1(
+                    &format!("Dropped dangling edge {} (references a missing node)", edge_id).into(),
+                );
+            }
             load_error.set(None);
             set_board.set(loaded_board);
         }
@@ -2222,6 +2235,7 @@ mod tests {
             // Simulate the load path's contract: a non-empty board must survive a
             // ParseError. We only call set_board on Loaded/Absent, never ParseError.
             let existing = Board {
+                version: None,
                 nodes: vec![Node::new("text".into(), 0.0, 0.0, "keep me".into())],
                 edges: vec![],
             };

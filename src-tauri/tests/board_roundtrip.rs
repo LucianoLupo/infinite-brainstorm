@@ -23,6 +23,7 @@ fn sample_node(id: &str, text: &str) -> Node {
 
 fn decorated_board() -> Board {
     Board {
+        version: None,
         nodes: vec![
             sample_node("n1", "Hello"),
             Node {

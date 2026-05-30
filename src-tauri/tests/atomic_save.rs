@@ -19,6 +19,7 @@ fn sample_node(id: &str, text: &str) -> Node {
 
 fn sample_board() -> Board {
     Board {
+        version: None,
         nodes: vec![sample_node("n1", "Hello"), sample_node("n2", "World")],
         edges: vec![Edge {
             id: "e1".to_string(),

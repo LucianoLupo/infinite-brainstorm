@@ -191,7 +191,7 @@ mod tests {
     }
 
     fn board_with(nodes: Vec<Node>, edges: Vec<Edge>) -> Board {
-        Board { nodes, edges }
+        Board { version: None, nodes, edges }
     }
 
     #[test]

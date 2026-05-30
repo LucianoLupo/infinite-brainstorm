@@ -210,6 +210,86 @@ pub fn is_local_md_file(path: &str) -> bool {
     path.starts_with('/') || path.starts_with("file://") || path.starts_with('~')
 }
 
+/// Extract the lowercased host portion of an `http(s)://` URL, or `None` if the
+/// URL is not http(s) or has no host. Pure string parsing — no allocation of a
+/// full URL parser, kept small so it is easy to unit-test.
+fn http_host(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))?;
+    // Host ends at the first '/', '?', '#', or end of string. Strip userinfo
+    // ("user:pass@host") and the port (":443") if present.
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if host_port.starts_with('[') {
+        // IPv6 literal: "[::1]:443" -> "[::1]"
+        host_port.split(']').next().map(|h| format!("{}]", h)).unwrap_or_else(|| host_port.to_string())
+    } else {
+        host_port.split(':').next().unwrap_or(host_port).to_string()
+    };
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_lowercase())
+    }
+}
+
+/// Decide whether `url` points at a *clearly public* host that is safe to
+/// auto-fetch a link preview for on board load. This is a conservative
+/// allowlist policy: we only auto-fetch hostnames that look like registrable
+/// public domains. Bare IP literals, `localhost`, and internal/private TLDs
+/// (`.local`, `.internal`, `.lan`, `.home`, `.corp`, `.intranet`) are NOT
+/// auto-fetched — the backend SSRF guard is the hard enforcement, but this
+/// stops a board.json link node from silently driving any request to an
+/// internal host on load. The backend remains the source of truth; explicit
+/// user interaction can still trigger a fetch through the normal command path.
+pub fn is_public_http_host(url: &str) -> bool {
+    let host = match http_host(url) {
+        Some(h) => h,
+        None => return false,
+    };
+
+    // Reject IPv6 literals outright (private classification can't be done by
+    // simple string match; never auto-fetch them).
+    if host.starts_with('[') {
+        return false;
+    }
+
+    // Reject bare IPv4 literals: if every dot-separated label is numeric, it's
+    // an IP, not a hostname — don't auto-fetch (backend still validates).
+    let labels: Vec<&str> = host.split('.').collect();
+    let all_numeric = !labels.is_empty()
+        && labels.iter().all(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_digit()));
+    if all_numeric {
+        return false;
+    }
+
+    // Reject localhost and known internal/private TLDs.
+    if host == "localhost" {
+        return false;
+    }
+    const INTERNAL_SUFFIXES: [&str; 7] = [
+        ".local",
+        ".localhost",
+        ".internal",
+        ".intranet",
+        ".lan",
+        ".home",
+        ".corp",
+    ];
+    if INTERNAL_SUFFIXES.iter().any(|s| host.ends_with(s)) {
+        return false;
+    }
+
+    // Require a registrable domain: at least one dot with non-empty labels on
+    // both sides (e.g. "example.com"). A single-label host ("intranet-box")
+    // is treated as internal and not auto-fetched.
+    labels.len() >= 2 && labels.iter().all(|l| !l.is_empty())
+}
+
 fn intersects_box(node: &Node, min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> bool {
     let node_right = node.x + node.width;
     let node_bottom = node.y + node.height;
@@ -480,6 +560,16 @@ pub fn App() -> impl IntoView {
             for node in &current_board.nodes {
                 if node.node_type == "link" && !node.text.is_empty() {
                     let url = node.text.clone();
+
+                    // SSRF gate: only auto-fetch previews for clearly-public
+                    // hosts on board load. Internal hosts / IP literals /
+                    // localhost are skipped so a board.json link node can't
+                    // silently drive a server-side request to an internal
+                    // address. The backend command remains the hard guard for
+                    // any explicit (user-triggered) fetch.
+                    if !is_public_http_host(&url) {
+                        continue;
+                    }
 
                     let needs_fetch = {
                         let cache = link_cache.borrow();
@@ -1537,6 +1627,64 @@ mod tests {
         fn handles_md_in_path_but_wrong_extension() {
             assert!(!is_local_md_file("/path/to/markdown/file.txt"));
             assert!(!is_local_md_file("~/Documents/md-files/note.pdf"));
+        }
+    }
+
+    mod public_http_host_tests {
+        use super::*;
+
+        #[test]
+        fn allows_public_domains() {
+            assert!(is_public_http_host("https://example.com"));
+            assert!(is_public_http_host("http://github.com/anthropics/claude-code"));
+            assert!(is_public_http_host("https://sub.domain.example.org/path?q=1#frag"));
+            assert!(is_public_http_host("https://example.com:8443/x"));
+            assert!(is_public_http_host("https://user:pass@example.com/x"));
+        }
+
+        #[test]
+        fn rejects_non_http_schemes() {
+            assert!(!is_public_http_host("file:///etc/passwd"));
+            assert!(!is_public_http_host("ftp://example.com"));
+            assert!(!is_public_http_host("/local/path.md"));
+            assert!(!is_public_http_host(""));
+        }
+
+        #[test]
+        fn rejects_localhost_and_internal_tlds() {
+            assert!(!is_public_http_host("http://localhost"));
+            assert!(!is_public_http_host("http://localhost:3000/admin"));
+            assert!(!is_public_http_host("http://printer.local"));
+            assert!(!is_public_http_host("http://db.internal/health"));
+            assert!(!is_public_http_host("http://server.lan"));
+            assert!(!is_public_http_host("http://nas.home"));
+            assert!(!is_public_http_host("http://wiki.corp"));
+            assert!(!is_public_http_host("http://x.intranet"));
+        }
+
+        #[test]
+        fn rejects_ipv4_literals() {
+            assert!(!is_public_http_host("http://169.254.169.254/latest/meta-data/"));
+            assert!(!is_public_http_host("http://127.0.0.1:8080"));
+            assert!(!is_public_http_host("http://10.0.0.5"));
+            assert!(!is_public_http_host("http://192.168.1.1/admin"));
+            // Even a public IP literal is skipped for auto-fetch (backend guards).
+            assert!(!is_public_http_host("http://8.8.8.8"));
+        }
+
+        #[test]
+        fn rejects_decimal_and_ipv6_literals() {
+            // Decimal-encoded 127.0.0.1 — single all-numeric label.
+            assert!(!is_public_http_host("http://2130706433/"));
+            // IPv6 literals are never auto-fetched.
+            assert!(!is_public_http_host("http://[::1]/"));
+            assert!(!is_public_http_host("http://[::ffff:127.0.0.1]/"));
+        }
+
+        #[test]
+        fn rejects_single_label_hosts() {
+            assert!(!is_public_http_host("http://intranet-box/dashboard"));
+            assert!(!is_public_http_host("http://router/"));
         }
     }
 

@@ -2,6 +2,7 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
@@ -166,6 +167,101 @@ fn get_board_path_cmd(app: AppHandle) -> Result<String, String> {
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Maximum number of redirect hops we will follow before giving up. Each hop is
+/// independently re-resolved and re-checked against the IP policy, so this is a
+/// hard bound on the redirect chain a malicious server can drive us through.
+const MAX_REDIRECTS: usize = 3;
+
+/// Maximum HTML body size we will buffer before parsing. A crafted (or
+/// compromised) server could otherwise stream gigabytes and OOM the process.
+const MAX_PREVIEW_BODY_BYTES: usize = 2 * 1024 * 1024; // 2 MB
+
+/// Return `true` if `addr` points at a host we must never issue a server-side
+/// request to: loopback, link-local, RFC1918 private ranges, CGNAT (100.64/10),
+/// or IPv6 ULA (fc00::/7). Enforced at the *resolved IP* level (not the
+/// hostname) so it is robust against DNS rebinding and obfuscated literals.
+///
+/// Pure function — unit-tested directly.
+fn is_blocked_ip(addr: IpAddr) -> bool {
+    match addr {
+        IpAddr::V4(v4) => is_blocked_ipv4(v4),
+        IpAddr::V6(v6) => {
+            // Normalize IPv4-mapped (::ffff:a.b.c.d) addresses to their v4 form
+            // and apply the v4 policy, so an attacker can't tunnel 127.0.0.1
+            // through [::ffff:127.0.0.1]. We deliberately do NOT use
+            // `to_ipv4()`, which also matches deprecated IPv4-*compatible*
+            // addresses (e.g. `::1` -> `0.0.0.1`) and would mis-route the IPv6
+            // loopback away from the v6 check below.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_blocked_ipv4(v4);
+            }
+            is_blocked_ipv6(v6)
+        }
+    }
+}
+
+fn is_blocked_ipv4(v4: Ipv4Addr) -> bool {
+    let o = v4.octets();
+    v4.is_loopback()              // 127.0.0.0/8
+        || v4.is_link_local()     // 169.254.0.0/16
+        || v4.is_private()        // 10/8, 172.16/12, 192.168/16
+        || v4.is_unspecified()    // 0.0.0.0
+        || v4.is_broadcast()      // 255.255.255.255
+        || (o[0] == 100 && (o[1] & 0xc0) == 0x40) // 100.64.0.0/10 (CGNAT)
+}
+
+fn is_blocked_ipv6(v6: Ipv6Addr) -> bool {
+    v6.is_loopback()              // ::1
+        || v6.is_unspecified()    // ::
+        || (v6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10 (link-local)
+        || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7  (ULA)
+}
+
+/// Resolve `host:port` and reject if any resolved address is blocked. Returns
+/// `Ok(())` only when the host resolves to at least one address and *every*
+/// resolved address is publicly routable. We reject if ANY address is blocked,
+/// so a hostname with mixed public/private records can't be used to slip past
+/// the check via record ordering.
+fn check_host_allowed(host: &str, port: u16) -> Result<(), String> {
+    // A bare IP literal still goes through ToSocketAddrs, which parses it
+    // without a DNS round-trip — covers decimal/hex/mapped literals once parsed.
+    let addrs: Vec<_> = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("Failed to resolve host: {}", e))?
+        .collect();
+
+    if addrs.is_empty() {
+        return Err("Host did not resolve to any address".to_string());
+    }
+
+    for sa in &addrs {
+        if is_blocked_ip(sa.ip()) {
+            return Err(format!(
+                "Refusing to fetch internal/private address ({})",
+                sa.ip()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate the host of a parsed URL against the IP policy. Extracts the host
+/// and effective port, then defers to `check_host_allowed`. Decimal/hex/mapped
+/// literal hosts are normalized by `Url`/`ToSocketAddrs` parsing before the
+/// check, so `http://2130706433/` and `http://[::ffff:127.0.0.1]/` are rejected.
+fn validate_url_host(parsed: &reqwest::Url) -> Result<(), String> {
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "URL has no host".to_string())?;
+    // Strip brackets from IPv6 literals so ToSocketAddrs parses them.
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| "URL has no port".to_string())?;
+    check_host_allowed(host, port)
+}
+
 #[tauri::command]
 async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
     // Skip non-HTTP URLs (file://, etc.)
@@ -181,12 +277,68 @@ async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
+        // Disable reqwest's automatic redirect handling: we follow redirects
+        // manually so we can re-resolve and re-validate every hop's host
+        // against the IP policy (DNS-rebinding-safe). The hop count is capped
+        // by MAX_REDIRECTS.
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
         .build()
         .map_err(|e| e.to_string())?;
 
-    let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
-    let html = response.text().await.map_err(|e| e.to_string())?;
+    let mut current_url = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
+    let mut response;
+    let mut hops = 0usize;
+
+    loop {
+        // Re-validate the host on every hop, including the initial request, so
+        // a redirect to an internal address (or a rebind between resolution and
+        // connection) is rejected before any request leaves the machine.
+        validate_url_host(&current_url)?;
+
+        response = client
+            .get(current_url.clone())
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if response.status().is_redirection() {
+            if hops >= MAX_REDIRECTS {
+                return Err("Too many redirects".to_string());
+            }
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or_else(|| "Redirect without Location header".to_string())?;
+            // Resolve the (possibly relative) Location against the current URL.
+            current_url = current_url
+                .join(location)
+                .map_err(|e| format!("Invalid redirect target: {}", e))?;
+            // Only http(s) redirects are followed; reject scheme downgrades to
+            // file://, data://, etc.
+            if current_url.scheme() != "http" && current_url.scheme() != "https" {
+                return Err("Refusing to follow non-http redirect".to_string());
+            }
+            hops += 1;
+            continue;
+        }
+
+        break;
+    }
+
+    // Stream the body with a running byte cap so a huge response cannot OOM the
+    // process before we parse it.
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if buf.len() + chunk.len() > MAX_PREVIEW_BODY_BYTES {
+            let remaining = MAX_PREVIEW_BODY_BYTES - buf.len();
+            buf.extend_from_slice(&chunk[..remaining]);
+            break;
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    let html = String::from_utf8_lossy(&buf).into_owned();
     let document = Html::parse_document(&html);
 
     // Selectors for Open Graph and fallback meta tags
@@ -215,13 +367,11 @@ async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
 
     let mut image = get_content(og_image).or_else(|| get_content(twitter_image));
 
-    // Make relative image URLs absolute
+    // Make relative image URLs absolute against the final (post-redirect) URL.
     if let Some(ref img) = image {
         if img.starts_with('/') {
-            if let Ok(base) = reqwest::Url::parse(&url) {
-                if let Ok(absolute) = base.join(img) {
-                    image = Some(absolute.to_string());
-                }
+            if let Ok(absolute) = current_url.join(img) {
+                image = Some(absolute.to_string());
             }
         }
     }
@@ -1299,6 +1449,118 @@ mod tests {
             assert_eq!(sniff_image_mime(b"BM\0\0"), Some("image/bmp"));
             assert_eq!(sniff_image_mime(b"not an image"), None);
             assert_eq!(sniff_image_mime(&[]), None);
+        }
+    }
+
+    mod ssrf_tests {
+        use super::*;
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+        use std::str::FromStr;
+
+        fn v4(s: &str) -> IpAddr {
+            IpAddr::V4(Ipv4Addr::from_str(s).unwrap())
+        }
+        fn v6(s: &str) -> IpAddr {
+            IpAddr::V6(Ipv6Addr::from_str(s).unwrap())
+        }
+
+        #[test]
+        fn blocks_loopback() {
+            assert!(is_blocked_ip(v4("127.0.0.1")));
+            assert!(is_blocked_ip(v4("127.255.255.255")));
+            assert!(is_blocked_ip(v6("::1")));
+        }
+
+        #[test]
+        fn blocks_link_local() {
+            // 169.254.0.0/16 includes the cloud metadata endpoint 169.254.169.254
+            assert!(is_blocked_ip(v4("169.254.0.1")));
+            assert!(is_blocked_ip(v4("169.254.169.254")));
+            // fe80::/10
+            assert!(is_blocked_ip(v6("fe80::1")));
+            assert!(is_blocked_ip(v6("febf::1")));
+        }
+
+        #[test]
+        fn blocks_rfc1918_private() {
+            assert!(is_blocked_ip(v4("10.0.0.1")));
+            assert!(is_blocked_ip(v4("10.255.255.255")));
+            assert!(is_blocked_ip(v4("172.16.0.1")));
+            assert!(is_blocked_ip(v4("172.31.255.255")));
+            assert!(is_blocked_ip(v4("192.168.1.1")));
+        }
+
+        #[test]
+        fn blocks_cgnat() {
+            // 100.64.0.0/10 spans 100.64.0.0 .. 100.127.255.255
+            assert!(is_blocked_ip(v4("100.64.0.1")));
+            assert!(is_blocked_ip(v4("100.127.255.255")));
+        }
+
+        #[test]
+        fn blocks_ula_and_unspecified() {
+            // fc00::/7 (fc00:: .. fdff::)
+            assert!(is_blocked_ip(v6("fc00::1")));
+            assert!(is_blocked_ip(v6("fd12:3456::1")));
+            assert!(is_blocked_ip(v4("0.0.0.0")));
+            assert!(is_blocked_ip(v6("::")));
+            assert!(is_blocked_ip(v4("255.255.255.255")));
+        }
+
+        #[test]
+        fn blocks_ipv4_mapped_loopback() {
+            // ::ffff:127.0.0.1 must normalize to the v4 loopback and be blocked.
+            assert!(is_blocked_ip(v6("::ffff:127.0.0.1")));
+            assert!(is_blocked_ip(v6("::ffff:10.0.0.1")));
+            assert!(is_blocked_ip(v6("::ffff:169.254.169.254")));
+        }
+
+        #[test]
+        fn allows_public_addresses() {
+            assert!(!is_blocked_ip(v4("8.8.8.8")));
+            assert!(!is_blocked_ip(v4("1.1.1.1")));
+            assert!(!is_blocked_ip(v4("172.15.255.255"))); // just below 172.16/12
+            assert!(!is_blocked_ip(v4("172.32.0.1"))); // just above 172.16/12
+            assert!(!is_blocked_ip(v4("100.63.255.255"))); // just below CGNAT
+            assert!(!is_blocked_ip(v4("100.128.0.0"))); // just above CGNAT
+            assert!(!is_blocked_ip(v4("93.184.216.34"))); // example.com
+            assert!(!is_blocked_ip(v6("2606:4700:4700::1111"))); // cloudflare
+        }
+
+        #[test]
+        fn check_host_allowed_rejects_loopback_literal() {
+            assert!(check_host_allowed("127.0.0.1", 80).is_err());
+            assert!(check_host_allowed("169.254.169.254", 80).is_err());
+        }
+
+        #[test]
+        fn check_host_allowed_rejects_decimal_literal() {
+            // http://2130706433/ == 127.0.0.1
+            assert!(check_host_allowed("2130706433", 80).is_err());
+        }
+
+        #[test]
+        fn validate_url_host_rejects_metadata_endpoint() {
+            let u = reqwest::Url::parse("http://169.254.169.254/latest/meta-data/").unwrap();
+            assert!(validate_url_host(&u).is_err());
+        }
+
+        #[test]
+        fn validate_url_host_rejects_decimal_loopback() {
+            let u = reqwest::Url::parse("http://2130706433/").unwrap();
+            assert!(validate_url_host(&u).is_err());
+        }
+
+        #[test]
+        fn validate_url_host_rejects_ipv6_mapped_loopback() {
+            let u = reqwest::Url::parse("http://[::ffff:127.0.0.1]/").unwrap();
+            assert!(validate_url_host(&u).is_err());
+        }
+
+        #[test]
+        fn validate_url_host_rejects_localhost() {
+            let u = reqwest::Url::parse("http://localhost:8080/admin").unwrap();
+            assert!(validate_url_host(&u).is_err());
         }
     }
 }

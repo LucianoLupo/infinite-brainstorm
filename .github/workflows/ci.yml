@@ -75,7 +75,10 @@ jobs:
         run: cargo check --target wasm32-unknown-unknown
 
       - name: cargo test (frontend / shared types, host)
-        run: cargo test
+        # Explicit packages: the root UI crate + the shared types crate. Not
+        # `--workspace` (that would also build the backend `infinite-brainstorm`
+        # crate, which needs Tauri system deps this job doesn't install).
+        run: cargo test -p infinite-brainstorm-ui -p brainstorm-types
 
   # Lint job. Pre-existing fmt + clippy findings live outside this item's scope,
   # so this job is INFORMATIONAL (continue-on-error) for now: it surfaces lints

@@ -1,0 +1,28 @@
+{
+  "nodes": [
+    {"id": "title", "x": 0, "y": -120, "width": 460, "height": 70, "text": "# Activity — Expense Approval", "node_type": "md"},
+    {"id": "start", "x": 0, "y": 60, "width": 110, "height": 60, "text": "● start", "node_type": "text", "color": "#22c55e", "group": "lane: Employee"},
+    {"id": "submit", "x": 160, "y": 40, "width": 200, "height": 100, "text": "Submit Expense Report", "node_type": "idea", "color": "#22c55e", "group": "lane: Employee"},
+    {"id": "notified", "x": 1280, "y": 40, "width": 200, "height": 100, "text": "Receive Result", "node_type": "idea", "color": "#22c55e", "group": "lane: Employee"},
+    {"id": "review", "x": 440, "y": 300, "width": 200, "height": 100, "text": "Review Report", "node_type": "idea", "color": "#22c55e", "group": "lane: Manager"},
+    {"id": "decision", "x": 720, "y": 310, "width": 150, "height": 80, "text": "◇ approved?", "node_type": "text", "color": "#e0b020", "group": "lane: Manager"},
+    {"id": "fork", "x": 1000, "y": 560, "width": 120, "height": 70, "text": "▮ fork", "node_type": "text", "color": "#e0b020", "group": "lane: Finance"},
+    {"id": "pay", "x": 1140, "y": 500, "width": 200, "height": 100, "text": "Pay Out", "node_type": "idea", "color": "#22c55e", "group": "lane: Finance"},
+    {"id": "email", "x": 1140, "y": 620, "width": 200, "height": 100, "text": "Email Receipt", "node_type": "idea", "color": "#22c55e", "group": "lane: Finance"},
+    {"id": "join", "x": 1380, "y": 560, "width": 120, "height": 70, "text": "▮ join", "node_type": "text", "color": "#e0b020", "group": "lane: Finance"},
+    {"id": "end", "x": 1540, "y": 575, "width": 110, "height": 60, "text": "◉ end", "node_type": "text", "color": "#c0392b", "group": "lane: Finance"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "start", "to_node": "submit"},
+    {"id": "e2", "from_node": "submit", "to_node": "review"},
+    {"id": "e3", "from_node": "review", "to_node": "decision"},
+    {"id": "e4", "from_node": "decision", "to_node": "fork", "label": "[approved]"},
+    {"id": "e5", "from_node": "decision", "to_node": "notified", "label": "[rejected]"},
+    {"id": "e6", "from_node": "fork", "to_node": "pay"},
+    {"id": "e7", "from_node": "fork", "to_node": "email"},
+    {"id": "e8", "from_node": "pay", "to_node": "join"},
+    {"id": "e9", "from_node": "email", "to_node": "join"},
+    {"id": "e10", "from_node": "join", "to_node": "notified"},
+    {"id": "e11", "from_node": "notified", "to_node": "end"}
+  ]
+}

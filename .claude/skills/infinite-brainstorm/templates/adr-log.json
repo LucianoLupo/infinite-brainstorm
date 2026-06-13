@@ -1,0 +1,14 @@
+{
+  "nodes": [
+    {"id": "title", "x": 0, "y": -200, "width": 420, "height": 110, "text": "# Decision Log — Payments Platform\n\n*Architecture Decision Records (Nygard format) · newest at top · supersession arrows point new → old*", "node_type": "md"},
+    {"id": "legend", "x": 470, "y": -200, "width": 420, "height": 250, "text": "## Legend — status → border color\n\n- 🟢 **Accepted** — `#22c55e`\n- 🟠 **Proposed** — `#f59e0b`\n- ⚪ **Superseded / Deprecated** — `#9ca3af`\n- 🔴 **Rejected** — `#ef4444`\n\n*Each ADR is an `md` node; `status` mirrors the label for `tag:`/`status:` filtering. Edge `supersedes` = newer ADR → the one it replaces.*", "node_type": "md"},
+    {"id": "adr1", "x": 0, "y": 0, "width": 320, "height": 220, "text": "# ADR-0001: Use PostgreSQL for the order store\n## Status\nAccepted\n## Context\nNeed ACID order persistence with strong consistency.\n## Decision\nWe will use PostgreSQL.\n## Consequences\n+ ACID, mature tooling. - Vertical scaling limits.", "node_type": "md", "color": "#22c55e", "status": "accepted", "group": "data"},
+    {"id": "adr2", "x": 0, "y": 260, "width": 320, "height": 220, "text": "# ADR-0002: Async messaging via Kafka\n## Status\nAccepted\n## Context\nServices must decouple; sync chains caused cascading failures.\n## Decision\nWe will communicate via Kafka events.\n## Consequences\n+ Decoupling, replay. - Eventual consistency.", "node_type": "md", "color": "#22c55e", "status": "accepted", "group": "messaging"},
+    {"id": "adr3", "x": 350, "y": 520, "width": 320, "height": 220, "text": "# ADR-0003: Synchronous REST between services\n## Status\nSuperseded by ADR-0002\n## Context\nInitial simple call model.\n## Decision\nWe will use REST for inter-service calls.\n## Consequences\n- Tight runtime coupling.", "node_type": "md", "color": "#9ca3af", "status": "superseded", "group": "messaging"},
+    {"id": "adr4", "x": 0, "y": 780, "width": 320, "height": 220, "text": "# ADR-0004: Saga pattern for distributed transactions\n## Status\nProposed\n## Context\nDB-per-service blocks 2PC.\n## Decision\nWe will use orchestrated sagas with compensations.\n## Consequences\n+ Consistency without 2PC. - Compensation complexity.", "node_type": "md", "color": "#f59e0b", "status": "proposed", "group": "data"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "adr2", "to_node": "adr3", "label": "supersedes"},
+    {"id": "e2", "from_node": "adr4", "to_node": "adr2", "label": "depends on"}
+  ]
+}

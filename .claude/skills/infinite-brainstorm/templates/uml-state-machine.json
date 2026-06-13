@@ -1,0 +1,24 @@
+{
+  "nodes": [
+    {"id": "title", "x": 0, "y": -120, "width": 360, "height": 70, "text": "# State Machine — Order", "node_type": "md"},
+    {"id": "init", "x": 0, "y": 80, "width": 90, "height": 60, "text": "● start", "node_type": "text", "color": "#22c55e"},
+    {"id": "created", "x": 300, "y": 80, "width": 200, "height": 110, "text": "Created\nentry / reserveStock", "node_type": "idea", "color": "#22c55e"},
+    {"id": "paid", "x": 600, "y": 80, "width": 200, "height": 110, "text": "Paid\nentry / captureFunds", "node_type": "idea", "color": "#22c55e"},
+    {"id": "shipped", "x": 900, "y": 80, "width": 200, "height": 110, "text": "Shipped\ndo / track", "node_type": "idea", "color": "#22c55e"},
+    {"id": "delivered", "x": 1200, "y": 80, "width": 200, "height": 110, "text": "Delivered", "node_type": "idea", "color": "#22c55e"},
+    {"id": "cancelled", "x": 600, "y": 320, "width": 200, "height": 110, "text": "Cancelled\nentry / refund", "node_type": "idea", "color": "#c0392b"},
+    {"id": "final", "x": 1500, "y": 95, "width": 90, "height": 60, "text": "◉ end", "node_type": "text", "color": "#c0392b"},
+    {"id": "finalC", "x": 900, "y": 335, "width": 90, "height": 60, "text": "◉ end", "node_type": "text", "color": "#c0392b"}
+  ],
+  "edges": [
+    {"id": "t-init", "from_node": "init", "to_node": "created", "label": "/ create"},
+    {"id": "t-pay", "from_node": "created", "to_node": "paid", "label": "pay [funds ok] / charge"},
+    {"id": "t-cancel-c", "from_node": "created", "to_node": "cancelled", "label": "cancel"},
+    {"id": "t-ship", "from_node": "paid", "to_node": "shipped", "label": "ship"},
+    {"id": "t-cancel-p", "from_node": "paid", "to_node": "cancelled", "label": "cancel / refund"},
+    {"id": "t-retry", "from_node": "paid", "to_node": "paid", "label": "payFailed [retries<3] / retry"},
+    {"id": "t-deliver", "from_node": "shipped", "to_node": "delivered", "label": "deliver"},
+    {"id": "t-final", "from_node": "delivered", "to_node": "final", "label": ""},
+    {"id": "t-finalC", "from_node": "cancelled", "to_node": "finalC", "label": ""}
+  ]
+}

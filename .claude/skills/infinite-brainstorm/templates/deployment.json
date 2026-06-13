@@ -1,0 +1,20 @@
+{
+  "nodes": [
+    {"id": "title", "x": -40, "y": -150, "width": 420, "height": 90, "text": "# Deployment — Production (AWS)\n*UML/C4 deployment view · one environment per board · top-to-bottom DNS→ALB→API→DB*", "node_type": "md"},
+    {"id": "legend", "x": 860, "y": -150, "width": 380, "height": 320, "text": "## Legend\n\n- **«executionEnvironment»** (indigo `#6366f1`) — a deployment node header; the surrounding `group` box is the node boundary.\n- **Container instance** (green `#22c55e`) — a deployed artifact, with `×N instances`.\n- **Infra** (red `#ef4444`) — `[Load Balancer]` / `[DNS]` / `[Firewall]`.\n- **Datastore** (cyan `#06b6d4`) — `[DB]`.\n- Edge labels carry **protocol + port** (e.g. `[HTTPS/443]`).\n\nAll nodes `status: production`.", "node_type": "md"},
+    {"id": "dns", "x": 300, "y": 0, "width": 200, "height": 90, "text": "[DNS] Route 53", "node_type": "text", "color": "#ef4444", "status": "production"},
+    {"id": "alb", "x": 300, "y": 160, "width": 220, "height": 90, "text": "[Load Balancer] ALB\nForwards [HTTPS/443]", "node_type": "text", "color": "#ef4444", "status": "production"},
+    {"id": "az_a_header", "x": 0, "y": 320, "width": 240, "height": 90, "text": "«executionEnvironment» AZ us-east-1a\n[ECS Fargate]", "node_type": "idea", "color": "#6366f1", "status": "production", "group": "AWS / AZ us-east-1a"},
+    {"id": "az_b_header", "x": 560, "y": 320, "width": 240, "height": 90, "text": "«executionEnvironment» AZ us-east-1b\n[ECS Fargate]", "node_type": "idea", "color": "#6366f1", "status": "production", "group": "AWS / AZ us-east-1b"},
+    {"id": "api_a", "x": 0, "y": 440, "width": 240, "height": 110, "text": "Orders API\n[Container: Node.js]\n×3 instances", "node_type": "idea", "color": "#22c55e", "status": "production", "group": "AWS / AZ us-east-1a"},
+    {"id": "api_b", "x": 560, "y": 440, "width": 240, "height": 110, "text": "Orders API\n[Container: Node.js]\n×3 instances", "node_type": "idea", "color": "#22c55e", "status": "production", "group": "AWS / AZ us-east-1b"},
+    {"id": "rds", "x": 280, "y": 640, "width": 260, "height": 110, "text": "[DB] RDS PostgreSQL\n[Multi-AZ]", "node_type": "text", "color": "#06b6d4", "status": "production"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "dns", "to_node": "alb", "label": "Routes [HTTPS/443]"},
+    {"id": "e2", "from_node": "alb", "to_node": "api_a", "label": "Forwards to [HTTPS/443]"},
+    {"id": "e3", "from_node": "alb", "to_node": "api_b", "label": "Forwards to [HTTPS/443]"},
+    {"id": "e4", "from_node": "api_a", "to_node": "rds", "label": "Reads/Writes [JDBC/5432]"},
+    {"id": "e5", "from_node": "api_b", "to_node": "rds", "label": "Reads/Writes [JDBC/5432]"}
+  ]
+}

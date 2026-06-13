@@ -179,6 +179,106 @@ cat ~/.claude/skills/infinite-brainstorm/templates/mind-map.json
 
 When creating boards from scratch, read the relevant template file, replace placeholder text with actual content, generate fresh UUIDs for all IDs, and write to `./board.json`. Extend by adding more nodes following the same layout pattern.
 
+## Software Architecture Diagrams
+
+Standard diagramming on the canvas. Architecture diagrams are just boards with a **fixed visual language** so any reader (or agent) decodes them the same way. The canvas only has rectangles, six node types, per-node color, the `group` bounding box, and directed labeled edges — so shape semantics (cylinder=DB, diamond=decision, hexagon=core, lollipop=interface) are encoded with **text prefixes + color + node_type**, never lost. One diagram = one concern = one audience. Always include a title note and a legend (`md`) node.
+
+### The Standard Visual Language (use across ALL templates)
+
+| Role | node_type | color (border) | Convention |
+|------|-----------|----------------|------------|
+| Person / actor / user | `note` | `#f59e0b` (amber) | Actors are always amber notes |
+| System / service / process **in focus** | `idea` | `#22c55e` (green) | The thing this diagram is about |
+| External / third-party system | `text` | `#9ca3af` (gray) | Prefix `[External] ` |
+| Database / data store / queue | `text` | `#06b6d4` (cyan) | Prefix `[DB] ` / `‹‹store›› ` / `[BUS] ` |
+| Infra / gateway / LB / firewall / broker | `text` | `#a855f7` (violet) | Prefix `«gateway»` / `[LB]` / `[Firewall]` / `[BUS]` |
+| Interface / contract / port | `link` | `#6366f1` (indigo) | Prefix `○ «interface» ` / `«port» ` |
+| Class / entity / ADR / markdown body | `md` | `#a78bfa` (purple) | Renders compartments / fields / decision text |
+| Decision / branch / fork / join (control) | `text` | `#e0b020` (gold) | Prefix `◇ ` / `▮ ` |
+| Start node | `text` | `#22c55e` (green) | `● start` |
+| End / final / error / compensation | `text`/`note` | `#ef4444`→`#c0392b` (red) | `◉ end` / `⊗` / `compensate:` |
+| Domain event (event-storming / EDA) | `note` | `#f97316` (orange) | Past-tense name |
+| Command (event-storming / CQRS) | `idea` | `#6366f1` (indigo) | Imperative name |
+
+**Edges carry everything the canvas can't draw:** protocol (`calls [JSON/HTTPS]`), cardinality (`1 --- 0..N`), order (`3. validate`), relationship marker (`◁ extends`, `◆ owns 1..*`, `«include»`, `publishes OrderPlaced`). Arrow direction = dependency / call / flow direction. There are no dashed edges — encode async/dependency/realization **in the label** (`async:`, `⇢ depends`, `implements`).
+
+**`group` = every boundary.** System boundary, package, layer, swimlane, trust zone, deployment node, bounded context, VPC/AZ/subnet — all are `group` values. Nesting is approximated with compound group names (`AWS us-east-1`, `AZ-a / public-subnet`). Put the boundary label in a header node at the box's top-left.
+
+### Decision framework — which diagram?
+
+Pick by **question + audience + abstraction level**. Zoom from outside in: Context → Container → Component → Code (C4) for *structure*; Sequence/Activity/State for *behavior*; ERD/DFD for *data*; Deployment/Cloud for *runtime topology*; ADR for *why*.
+
+| What you're trying to communicate / the question | Recommended diagram(s) | Template file |
+|---|---|---|
+| "What is this system, who uses it, what does it depend on?" (big picture, any audience) | C4 System Context (L1) | `templates/c4-context.json` |
+| "What are the major apps/datastores and how do they talk?" (engineers) | C4 Container (L2) | `templates/c4-container.json` |
+| "How is this one complex container organized inside?" | C4 Component (L3) | `templates/c4-component.json` |
+| "In exactly what order do the parts collaborate for this one feature?" | UML Sequence | `templates/uml-sequence.json` |
+| "What are the types/entities, their fields, and how do they relate (is-a / has-a / multiplicity)?" | UML Class Diagram | `templates/uml-class.json` |
+| "What states can this thing be in and what events move it?" | UML State Machine | `templates/uml-state-machine.json` |
+| "What's the step-by-step workflow, where does it branch/parallelize, and who owns each step?" | UML Activity (swimlanes) | `templates/uml-activity.json` |
+| "What's the relational schema — tables, keys, 1:N / M:N, optional vs mandatory?" | ERD (crow's foot) | `templates/erd-crows-foot.json` |
+| "Where does data come from, what transforms it, where does it rest?" (scope/threat-modeling) | Data Flow Diagram | `templates/dfd-context.json` |
+| "Which services exist, who calls whom (sync/async), who owns which DB?" | Microservices Service Map | `templates/microservices-service-map.json` |
+| "Who publishes which events and who consumes them?" (async / pub-sub) | Event-Driven Flow | `templates/event-driven-flow.json` |
+| "What's core domain vs replaceable plumbing; which deps point inward?" | Hexagonal (Ports & Adapters) | `templates/hexagonal-ports-adapters.json` |
+| "How are responsibilities split top-to-bottom (UI→business→data)?" | Layered / N-tier (use Hexagonal or Activity-style stack) | `templates/hexagonal-ports-adapters.json` |
+| "What runs where — instances, infra, networking — per environment?" | Deployment (C4 / UML) | `templates/deployment.json` |
+| "Why did we decide X, and what did we trade away?" | ADR / Decision Log | `templates/adr-log.json` |
+| "Have I covered every stakeholder / what's the doc structure?" | (meta) 4+1 views / arc42 index board — build from ADR + C4 templates | `templates/adr-log.json` + C4 set |
+| "Which diagram should I even draw?" | This table → pick by question + audience + abstraction level | — |
+
+| Audience | Reach for |
+|----------|-----------|
+| Everyone (exec, product, new hire) | C4 Context, C4 Container |
+| Backend / OO engineers | UML Class, ERD, UML Component |
+| Distributed-systems / platform | Microservices service map, Event-driven flow, Saga |
+| QA / protocol reviewers | UML Sequence, State machine |
+| Process / business stakeholders | Activity (swimlanes), Event Storming, DFD |
+| Ops / SRE / security | Deployment, Cloud, Network, K8s |
+| Future maintainers | ADR / decision log |
+
+**Anti-patterns to refuse:** mixing abstraction levels in one board (containers next to classes next to VPCs); no legend; one mega-diagram doing every view's job; unlabeled edges (unknown protocol/direction); no title/audience/environment; showing everything instead of the relevant subset.
+
+### Templates
+
+Each template ships as `templates/<key>.json` with a realistic worked example. Read it, replace the domain text, regenerate UUIDs, write to `./board.json`, then `brainstorm validate`.
+
+| Template | File | When to use |
+|----------|------|-------------|
+| C4 System Context (L1) | [templates/c4-context.json](templates/c4-context.json) | First diagram: system + its people + external deps. Audience: everyone |
+| C4 Container (L2) | [templates/c4-container.json](templates/c4-container.json) | Apps + datastores + tech + protocols inside one system |
+| C4 Component (L3) | [templates/c4-component.json](templates/c4-component.json) | Internal building blocks of one complex container |
+| UML Sequence | [templates/uml-sequence.json](templates/uml-sequence.json) | Exact message order of one scenario (time flows down) |
+| UML Class | [templates/uml-class.json](templates/uml-class.json) | Static OO/domain model: types, fields, inheritance, multiplicity |
+| UML State Machine | [templates/uml-state-machine.json](templates/uml-state-machine.json) | Lifecycle: states + event-guarded transitions |
+| UML Activity (swimlanes) | [templates/uml-activity.json](templates/uml-activity.json) | Workflow/process with branches, parallelism, ownership lanes |
+| ERD (crow's foot) | [templates/erd-crows-foot.json](templates/erd-crows-foot.json) | Relational schema: tables, PK/FK, cardinality |
+| Data Flow Diagram | [templates/dfd-context.json](templates/dfd-context.json) | Data-in-motion: processes, stores, flows, system boundary |
+| Microservices Service Map | [templates/microservices-service-map.json](templates/microservices-service-map.json) | Service topology, sync/async coupling, DB-per-service |
+| Event-Driven Flow | [templates/event-driven-flow.json](templates/event-driven-flow.json) | Producers → broker/topics → consumers; pub/sub |
+| Hexagonal (Ports & Adapters) | [templates/hexagonal-ports-adapters.json](templates/hexagonal-ports-adapters.json) | Core domain isolated behind ports; driving vs driven adapters |
+| Deployment (C4 / UML) | [templates/deployment.json](templates/deployment.json) | What runs where: nodes, instances, infra, per environment |
+| ADR / Decision Log | [templates/adr-log.json](templates/adr-log.json) | Why the architecture is this way; status-colored decision chain |
+
+**C4 (Context/Container/Component)** — zoom levels of one system. Notation: in-focus box highlighted, people above, external systems gray, every relationship a single unidirectional verb-labeled arrow. L1 omits tech; L2+ requires tech in node text `[Container: React SPA]` and protocol in every edge label `[JSON/HTTPS]`. Layout: 3 bands (people y=0 → focus y=260 → externals y=520) for L1; layered request flow (client→API→DB top-to-bottom) for L2/L3, all in-focus boxes sharing one `group` = the dashed system boundary. **C4 palette (deliberate exception to the green=in-focus rule):** the C4 templates use C4's canonical blues — system `#1168bd` → container `#438dd5` → component `#85bbf0` (lighter as you zoom in) — with person amber `#f59e0b`, external gray `#9ca3af`, datastore cyan `#06b6d4`. Keep these so the diagrams read as real C4 to any engineer.
+
+**UML Sequence** — one column per participant, lifeline heads at the top, time flows **down**. Encode message kind in the label glyph: `→ call:`, `⇢ async:`, `⤺ return:`. `alt`/`loop`/`opt` fragments = a `group` named for the operator+guard wrapping the rows inside it. Never route an edge upward except an explicit return.
+
+**UML Class** — one `md` rectangle per class: name line, `---`, attributes (`+/-/#` visibility), `---`, operations. Markers go in the edge label + direction: inheritance child→parent `◁ extends`; realization `◁ implements`; composition whole→part `◆ owns 1..*`; aggregation `◇ has 0..*`; association `1 — 0..*`; dependency `⇢ uses`. Always carry multiplicity. Base/abstract types on top so `extends` arrows point up; `group` boxes a package.
+
+**State machine / Activity** — states/actions = `idea` green; decisions/forks/joins = gold `text` (`◇`/`▮`); start green / end red. Transition label = `trigger [guard] / effect`. Activity swimlanes = one `group` per actor lane; flow left→right within a lane.
+
+**ERD** — entities = `idea` (strong) / cyan `text` (lookup) / amber `note` (weak), attributes inline (`PK `/`FK ` prefixes). Edge parent→child, label = verb + cardinality `places 1..*`; M:N resolved into a junction node. `group` = a schema/bounded context.
+
+**DFD** — process = `idea` (number + verb name); external entity = amber `note` `«external»`; store = cyan `text` `‹‹store›› D1`; flow = edge labeled with the **data packet name** (never a verb). `group='system boundary'` wraps processes+stores; external entities sit outside.
+
+**Microservices / EDA / Hexagonal** — service = `idea` green; its DB = cyan `[DB]` (database-per-service, never shared); broker/gateway = violet `[BUS]`/`«gateway»`. Sync vs async lives **only in the edge label** (`sync: REST GET /x` vs `async: publishes OrderPlaced`). Hexagonal: core = central `idea`, ports = indigo `«port»` nodes on its edges, driving adapters amber on the LEFT, driven adapters gray/cyan on the RIGHT, all dependency arrows pointing **inward** to the core.
+
+**Deployment** — deployment node = `group` bounding box with an `idea` header `«executionEnvironment» [Tech]`; container instances inside = green `idea` `×N`; infra (LB/DNS/firewall) = red/violet `text`; DB = cyan. Edge labels carry protocol+port `Forwards to [HTTPS/443]`. One environment per board; tag every node `status='production'`.
+
+**ADR** — one `md` node per decision titled `ADR-NNNN: <imperative>`, body = `## Status / ## Context / ## Decision / ## Consequences`. Border by status: accepted green, proposed amber, superseded/deprecated gray, rejected red. `supersedes` edge new→old; `group` by theme.
+
 ## Common Operations
 
 ### Read the board

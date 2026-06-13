@@ -1,0 +1,20 @@
+{
+  "nodes": [
+    {"id": "title", "x": 320, "y": -100, "width": 280, "height": 60, "text": "# Class Model — Ordering", "node_type": "md"},
+    {"id": "account", "x": 320, "y": 0, "width": 280, "height": 180, "text": "*Account*\n---\n# id: UUID\n# email: String\n---\n+ login()", "node_type": "md", "color": "#f59e0b"},
+    {"id": "customer", "x": 320, "y": 220, "width": 280, "height": 180, "text": "**Customer**\n---\n- name: String\n- address: Address\n---\n+ placeOrder()", "node_type": "md", "color": "#a78bfa"},
+    {"id": "gateway", "x": 760, "y": 0, "width": 240, "height": 140, "text": "«interface» PaymentGateway\n---\n+ charge(amount): Receipt", "node_type": "link", "color": "#6366f1"},
+    {"id": "stripe", "x": 760, "y": 220, "width": 280, "height": 180, "text": "**StripeGateway**\n---\n+ charge(amount): Receipt", "node_type": "md", "color": "#a78bfa"},
+    {"id": "order", "x": 320, "y": 460, "width": 280, "height": 180, "text": "**Order**\n---\n- placedAt: DateTime\n- total: Money\n---\n+ addLine(p, qty)", "node_type": "md", "color": "#a78bfa", "group": "ordering"},
+    {"id": "orderline", "x": 0, "y": 700, "width": 280, "height": 180, "text": "**OrderLine**\n---\n- qty: int\n- unitPrice: Money", "node_type": "md", "color": "#a78bfa", "group": "ordering"},
+    {"id": "product", "x": 640, "y": 700, "width": 280, "height": 180, "text": "**Product**\n---\n- sku: String\n- name: String\n- price: Money", "node_type": "md", "color": "#a78bfa", "group": "ordering"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "customer", "to_node": "account", "label": "◁ extends"},
+    {"id": "e2", "from_node": "stripe", "to_node": "gateway", "label": "◁ implements"},
+    {"id": "e3", "from_node": "customer", "to_node": "order", "label": "1 — places 1..*"},
+    {"id": "e4", "from_node": "order", "to_node": "orderline", "label": "◆ owns 1..*"},
+    {"id": "e5", "from_node": "orderline", "to_node": "product", "label": "1 — refers 1"},
+    {"id": "e6", "from_node": "order", "to_node": "gateway", "label": "⇢ uses"}
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "nodes": [
+    {"id": "title", "x": 380, "y": -110, "width": 420, "height": 70, "text": "# Hexagonal — Order Service\n\n*Ports & Adapters · the Dependency Rule: every arrow points inward toward the core*", "node_type": "md"},
+    {"id": "legend", "x": 0, "y": -240, "width": 360, "height": 200, "text": "## Legend\n- **🟩 Core / Domain** (`#22c55e`) — use-cases & business rules; depends on nothing outside.\n- **🟦 «port»** (`#6366f1`) — an interface the core owns.\n- **🟧 «driving»** (`#f59e0b`, LEFT) — primary adapters that *call in*.\n- **⬜ «driven»** (`#9ca3af`, RIGHT) — secondary adapters the core *calls out* to; `[DB]` datastore is cyan `#06b6d4`.\n- Edges: adapter→port `implements`; everything points **inward**.", "node_type": "md"},
+    {"id": "rest", "x": 0, "y": 40, "width": 200, "height": 100, "text": "«driving» REST API\nHTTP controller — POST /orders", "node_type": "note", "color": "#f59e0b"},
+    {"id": "cli", "x": 0, "y": 200, "width": 200, "height": 100, "text": "«driving» CLI\norder place …", "node_type": "note", "color": "#f59e0b"},
+    {"id": "test", "x": 0, "y": 360, "width": 200, "height": 100, "text": "«driving» Test Harness\nDrives the core directly", "node_type": "note", "color": "#f59e0b"},
+    {"id": "pPlace", "x": 270, "y": 210, "width": 200, "height": 80, "text": "«port» ForPlacingOrders", "node_type": "link", "color": "#6366f1"},
+    {"id": "core", "x": 540, "y": 180, "width": 260, "height": 160, "text": "Application Core / Domain\nOrder use-cases, business rules.", "node_type": "idea", "color": "#22c55e"},
+    {"id": "pStore", "x": 870, "y": 120, "width": 200, "height": 80, "text": "«port» ForStoringOrders", "node_type": "link", "color": "#6366f1"},
+    {"id": "pNotify", "x": 870, "y": 300, "width": 200, "height": 80, "text": "«port» ForNotifying", "node_type": "link", "color": "#6366f1"},
+    {"id": "pg", "x": 1130, "y": 100, "width": 220, "height": 100, "text": "[DB] «driven» Postgres\nOrderRepository — SQL", "node_type": "text", "color": "#06b6d4"},
+    {"id": "smtp", "x": 1130, "y": 300, "width": 220, "height": 100, "text": "«driven» SMTP Email\nSends order confirmations", "node_type": "text", "color": "#9ca3af"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "rest", "to_node": "pPlace", "label": "drives"},
+    {"id": "e2", "from_node": "cli", "to_node": "pPlace", "label": "drives"},
+    {"id": "e3", "from_node": "test", "to_node": "pPlace", "label": "drives"},
+    {"id": "e4", "from_node": "pPlace", "to_node": "core", "label": "calls"},
+    {"id": "e5", "from_node": "core", "to_node": "pStore", "label": "uses"},
+    {"id": "e6", "from_node": "core", "to_node": "pNotify", "label": "uses"},
+    {"id": "e7", "from_node": "pg", "to_node": "pStore", "label": "implements"},
+    {"id": "e8", "from_node": "smtp", "to_node": "pNotify", "label": "implements"}
+  ]
+}

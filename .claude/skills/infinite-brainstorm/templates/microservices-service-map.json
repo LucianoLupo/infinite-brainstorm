@@ -1,0 +1,29 @@
+{
+  "nodes": [
+    {"id": "title", "x": 0, "y": -200, "width": 420, "height": 100, "text": "# Service Map — Food Delivery\n\n*Service-dependency map · each service owns its own DB · sync vs async shown in edge labels*", "node_type": "md"},
+    {"id": "legend", "x": 1000, "y": -240, "width": 420, "height": 300, "text": "## Legend\n\n- **🟩 Service** — `idea` `#22c55e` (a deployable bounded context)\n- **🟦 DB-per-service** — `text [DB]` `#06b6d4`, **never shared**\n- **🟪 Gateway / Broker** — `text` `#a855f7`, `«gateway»` / `[BUS]`\n- **⬜ External** — `text [External]` `#9ca3af`\n- **Edges**: `sync:` (REST/HTTPS, blocking) vs `async:` (event/publish)\n- **`group`** = bounded context / owning team", "node_type": "md"},
+    {"id": "gw", "x": 0, "y": 200, "width": 220, "height": 110, "text": "«gateway» API Gateway\n[Edge / routing · authN]", "node_type": "text", "color": "#a855f7", "group": "edge"},
+    {"id": "order", "x": 350, "y": 0, "width": 220, "height": 110, "text": "Order Service\n[owns order lifecycle]", "node_type": "idea", "color": "#22c55e", "group": "order"},
+    {"id": "restaurant", "x": 350, "y": 200, "width": 220, "height": 110, "text": "Restaurant Service\n[menus · availability]", "node_type": "idea", "color": "#22c55e", "group": "restaurant"},
+    {"id": "delivery", "x": 350, "y": 400, "width": 220, "height": 110, "text": "Delivery Service\n[dispatch · tracking]", "node_type": "idea", "color": "#22c55e", "group": "delivery"},
+    {"id": "payment", "x": 350, "y": 600, "width": 220, "height": 110, "text": "Payment Service\n[charges · refunds]", "node_type": "idea", "color": "#22c55e", "group": "payment"},
+    {"id": "orderdb", "x": 700, "y": 40, "width": 200, "height": 90, "text": "[DB] orders-db\n[PostgreSQL]", "node_type": "text", "color": "#06b6d4", "group": "order"},
+    {"id": "restdb", "x": 700, "y": 240, "width": 200, "height": 90, "text": "[DB] restaurant-db\n[PostgreSQL]", "node_type": "text", "color": "#06b6d4", "group": "restaurant"},
+    {"id": "deldb", "x": 700, "y": 440, "width": 200, "height": 90, "text": "[DB] delivery-db\n[PostgreSQL]", "node_type": "text", "color": "#06b6d4", "group": "delivery"},
+    {"id": "paydb", "x": 700, "y": 640, "width": 200, "height": 90, "text": "[DB] payment-db\n[PostgreSQL]", "node_type": "text", "color": "#06b6d4", "group": "payment"},
+    {"id": "stripe", "x": 1000, "y": 600, "width": 200, "height": 90, "text": "[External] Stripe API\n[card processing]", "node_type": "text", "color": "#9ca3af"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "gw", "to_node": "order", "label": "sync: REST /orders"},
+    {"id": "e2", "from_node": "gw", "to_node": "restaurant", "label": "sync: REST"},
+    {"id": "e3", "from_node": "gw", "to_node": "delivery", "label": "sync: REST"},
+    {"id": "e4", "from_node": "order", "to_node": "restaurant", "label": "sync: GET /menu [REST]"},
+    {"id": "e5", "from_node": "order", "to_node": "payment", "label": "sync: POST /charge [REST]"},
+    {"id": "e6", "from_node": "order", "to_node": "delivery", "label": "async: publishes OrderPlaced"},
+    {"id": "e7", "from_node": "payment", "to_node": "stripe", "label": "sync: charge [HTTPS]"},
+    {"id": "e8", "from_node": "order", "to_node": "orderdb", "label": "owns / reads+writes"},
+    {"id": "e9", "from_node": "restaurant", "to_node": "restdb", "label": "owns"},
+    {"id": "e10", "from_node": "delivery", "to_node": "deldb", "label": "owns"},
+    {"id": "e11", "from_node": "payment", "to_node": "paydb", "label": "owns"}
+  ]
+}

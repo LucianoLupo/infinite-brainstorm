@@ -1,0 +1,18 @@
+{
+  "nodes": [
+    {"id": "title", "x": 0, "y": -180, "width": 360, "height": 110, "text": "# ERD — Bookstore\n\nCrow's foot notation. **idea** = strong entity, **text [lookup]** = reference table, **note** = weak entity / junction. Cardinality in edge labels: `1..*` `0..*` `*..*`.", "node_type": "md", "group": "bookstore"},
+    {"id": "customer", "x": 0, "y": 0, "width": 240, "height": 150, "text": "CUSTOMER\nPK id\n   name\n   email", "node_type": "idea", "color": "#22c55e", "group": "bookstore"},
+    {"id": "order", "x": 700, "y": 0, "width": 240, "height": 150, "text": "ORDER\nPK id\nFK customer_id\n   placed_at\n   total", "node_type": "idea", "color": "#22c55e", "group": "bookstore"},
+    {"id": "book", "x": 700, "y": 500, "width": 240, "height": 150, "text": "BOOK\nPK id\nFK publisher_id\n   title\n   isbn", "node_type": "idea", "color": "#22c55e", "group": "bookstore"},
+    {"id": "publisher", "x": 1100, "y": 500, "width": 220, "height": 130, "text": "[lookup] PUBLISHER\nPK id\n   name", "node_type": "text", "color": "#06b6d4", "group": "bookstore"},
+    {"id": "address", "x": 0, "y": 300, "width": 220, "height": 130, "text": "«weak» ADDRESS\nPK(part) line1\nFK customer_id\n   city", "node_type": "note", "color": "#f59e0b", "group": "bookstore"},
+    {"id": "orderitem", "x": 350, "y": 250, "width": 220, "height": 130, "text": "ORDER_ITEM (junction)\nFK order_id\nFK book_id\n   qty", "node_type": "note", "color": "#f59e0b", "group": "bookstore"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "customer", "to_node": "order", "label": "places 1..*"},
+    {"id": "e2", "from_node": "customer", "to_node": "address", "label": "has 0..*"},
+    {"id": "e3", "from_node": "order", "to_node": "orderitem", "label": "contains 1..*"},
+    {"id": "e4", "from_node": "book", "to_node": "orderitem", "label": "in 0..*"},
+    {"id": "e5", "from_node": "publisher", "to_node": "book", "label": "publishes 1..*"}
+  ]
+}

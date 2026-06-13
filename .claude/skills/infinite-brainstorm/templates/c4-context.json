@@ -1,0 +1,16 @@
+{
+  "nodes": [
+    {"id": "title", "x": 0, "y": 0, "width": 280, "height": 80, "text": "# System Context — Internet Banking System\n\nC4 Model · Level 1", "node_type": "md", "color": "#a855f7"},
+    {"id": "legend", "x": 1000, "y": 0, "width": 360, "height": 180, "text": "## Legend\n\n- **[Person]** — amber note\n- **In-focus system** — green idea\n- **[External]** — gray text\n- Edges = intent verbs (no tech)", "node_type": "md", "color": "#a855f7"},
+    {"id": "customer", "x": 320, "y": 0, "width": 240, "height": 120, "text": "[Person] Personal Banking Customer\nA customer of the bank.", "node_type": "note", "color": "#f59e0b"},
+    {"id": "ibs", "x": 300, "y": 260, "width": 280, "height": 140, "text": "[Software System] Internet Banking System\nLets customers view accounts and make payments.", "node_type": "idea", "color": "#1168bd", "group": "context:Internet Banking System"},
+    {"id": "mainframe", "x": 0, "y": 520, "width": 240, "height": 120, "text": "[External] Mainframe Banking System\nStores core banking info about customers, accounts, transactions.", "node_type": "text", "color": "#9ca3af"},
+    {"id": "email", "x": 660, "y": 520, "width": 240, "height": 120, "text": "[External] E-mail System\nMicrosoft Exchange.", "node_type": "text", "color": "#9ca3af"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "customer", "to_node": "ibs", "label": "Uses"},
+    {"id": "e2", "from_node": "ibs", "to_node": "mainframe", "label": "Gets account info from, makes payments using"},
+    {"id": "e3", "from_node": "ibs", "to_node": "email", "label": "Sends e-mail using"},
+    {"id": "e4", "from_node": "email", "to_node": "customer", "label": "Sends e-mails to"}
+  ]
+}

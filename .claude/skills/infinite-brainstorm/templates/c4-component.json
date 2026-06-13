@@ -1,0 +1,24 @@
+{
+  "nodes": [
+    {"id": "title", "x": 0, "y": -210, "width": 380, "height": 90, "text": "# Component — API Application\nC4 Level 3: components inside the **API Application** container.", "node_type": "md"},
+    {"id": "legend", "x": 640, "y": -210, "width": 410, "height": 220, "text": "## Legend\n- **[Component]** (palest C4 blue `#85bbf0`) — a part inside this container; states its implementation tech.\n- **[Container]** (`#438dd5`) — a sibling deployable (the SPA caller).\n- **[DB]** (cyan `#06b6d4`) — a datastore.\n- The **API Application** boundary = nodes sharing `group`.\n- Edges are directed, labeled with intent + protocol.", "node_type": "md"},
+    {"id": "spa", "x": 0, "y": 0, "width": 220, "height": 100, "text": "[Container] Single-Page App\n[React]", "node_type": "text", "color": "#438dd5"},
+    {"id": "signin", "x": 0, "y": 160, "width": 250, "height": 120, "text": "Sign In Controller\n[Component: Spring REST Controller]\nLets users sign in.", "node_type": "idea", "color": "#85bbf0", "group": "API Application"},
+    {"id": "accCtrl", "x": 300, "y": 160, "width": 250, "height": 120, "text": "Accounts Summary Controller\n[Component: Spring REST Controller]", "node_type": "idea", "color": "#85bbf0", "group": "API Application"},
+    {"id": "security", "x": 0, "y": 320, "width": 250, "height": 120, "text": "Security Component\n[Component: Spring Bean]\nValidates credentials.", "node_type": "idea", "color": "#85bbf0", "group": "API Application"},
+    {"id": "accSvc", "x": 300, "y": 320, "width": 250, "height": 120, "text": "Accounts Service\n[Component: Spring Bean]", "node_type": "idea", "color": "#85bbf0", "group": "API Application"},
+    {"id": "mfFacade", "x": 0, "y": 480, "width": 250, "height": 120, "text": "Mainframe Facade\n[Component: Spring Bean]", "node_type": "idea", "color": "#85bbf0", "group": "API Application"},
+    {"id": "repo", "x": 300, "y": 480, "width": 250, "height": 120, "text": "Accounts Repository\n[Component: Spring Data JPA]", "node_type": "idea", "color": "#85bbf0", "group": "API Application"},
+    {"id": "db", "x": 150, "y": 680, "width": 240, "height": 110, "text": "[DB] Database\n[PostgreSQL]", "node_type": "text", "color": "#06b6d4"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "spa", "to_node": "signin", "label": "Makes API calls to [JSON/HTTPS]"},
+    {"id": "e2", "from_node": "spa", "to_node": "accCtrl", "label": "Makes API calls to [JSON/HTTPS]"},
+    {"id": "e3", "from_node": "signin", "to_node": "security", "label": "Uses"},
+    {"id": "e4", "from_node": "accCtrl", "to_node": "accSvc", "label": "Uses"},
+    {"id": "e5", "from_node": "accSvc", "to_node": "mfFacade", "label": "Uses"},
+    {"id": "e6", "from_node": "accSvc", "to_node": "repo", "label": "Uses"},
+    {"id": "e7", "from_node": "repo", "to_node": "db", "label": "Reads/writes [JDBC]"},
+    {"id": "e8", "from_node": "mfFacade", "to_node": "db", "label": "Reads [JDBC]"}
+  ]
+}

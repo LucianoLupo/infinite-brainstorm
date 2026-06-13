@@ -261,7 +261,9 @@ infinite-brainstorm/                # Cargo workspace
 ├── .claude/skills/infinite-brainstorm/  # Claude Code skill + board templates
 │   ├── SKILL.md             # Skill instructions (schema, layouts, operations)
 │   ├── board.schema.json    # JSON Schema — single source of truth for board.json
-│   └── templates/           # 6 board templates (mind-map, kanban, flowchart, swot, pros-cons, timeline)
+│   └── templates/           # 20 board templates: 6 general (mind-map, kanban, flowchart, swot, pros-cons, timeline)
+│                            #   + 14 software-architecture (C4 context/container/component, UML sequence/class/state-machine/activity,
+│                            #   ERD, DFD, microservices map, event-driven, hexagonal, deployment, ADR log)
 ├── Cargo.toml               # Workspace root + frontend deps; size-optimized [profile.release]
 ├── Cargo.lock               # Committed (workspace builds binaries)
 ├── rust-toolchain.toml      # Pins channel + wasm32 target
@@ -513,7 +515,7 @@ Drags use pointer-capture / document listeners so they continue off-canvas (no c
 - ✅ **Group containers** - Nodes with same `group` value get a visual bounding box
 - ✅ **Node auto-size** - Agents can omit `width`/`height`; app auto-sizes on load based on text content
 - ✅ **Auto-layout algorithms** - Layout math documented in skill for Claude Code (grid, tree, radial, kanban, flowchart, timeline, clustering)
-- ✅ **Board templates** - 6 template JSON files in `templates/` (mind-map, kanban, flowchart, swot, pros-cons, timeline)
+- ✅ **Board templates** - 20 template JSON files in `templates/`: 6 general (mind-map, kanban, flowchart, swot, pros-cons, timeline) + 14 software-architecture diagrams (C4 L1/L2/L3, UML sequence/class/state-machine/activity, ERD, DFD, microservices service map, event-driven flow, hexagonal ports-and-adapters, deployment, ADR log). The skill's "Software Architecture Diagrams" section documents the standard visual language, a question→diagram decision table, and per-diagram how/when/why so the agent diagrams architecture the standard way.
 - ✅ **CLI validate/query** - `brainstorm validate` (structural checks, non-zero exit) and `brainstorm query` (count/nodes/edges/node:/type:/tag:) for headless agent loops
 - ✅ **JSON Schema** - `board.schema.json` is the single source of truth for the board format
 - ✅ **Atomic save + non-destructive load** - No partial writes; a parse error preserves the board and shows a banner instead of blanking it

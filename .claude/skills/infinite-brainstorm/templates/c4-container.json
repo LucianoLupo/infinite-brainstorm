@@ -1,0 +1,22 @@
+{
+  "nodes": [
+    {"id": "title", "x": 0, "y": -120, "width": 520, "height": 80, "text": "# Container — Internet Banking System\n\n*C4 Level 2 · the containers (apps & datastores) inside one system*", "node_type": "md"},
+    {"id": "legend", "x": 1000, "y": 0, "width": 320, "height": 250, "text": "## Legend\n\n- **Container** (in focus) — React/RN/Spring app\n- **Datastore** — `[DB]` PostgreSQL\n- **Person** — human actor\n- **External** — `[External]` outside the system\n- **Boundary** = `group: Internet Banking System`\n\nEvery container states its **tech**; every edge states its **protocol**.", "node_type": "md"},
+    {"id": "customer", "x": 300, "y": 0, "width": 220, "height": 110, "text": "[Person] Customer\n\nA personal banking customer of the bank.", "node_type": "note", "color": "#f59e0b"},
+    {"id": "spa", "x": 0, "y": 180, "width": 240, "height": 120, "text": "Single-Page App\n[Container: React]\nProvides banking features via the browser.", "node_type": "idea", "color": "#438dd5", "group": "Internet Banking System"},
+    {"id": "mobile", "x": 320, "y": 180, "width": 240, "height": 120, "text": "Mobile App\n[Container: React Native]\nProvides a subset of banking features.", "node_type": "idea", "color": "#438dd5", "group": "Internet Banking System"},
+    {"id": "api", "x": 160, "y": 360, "width": 260, "height": 130, "text": "API Application\n[Container: Java/Spring MVC]\nProvides banking via JSON/HTTPS.", "node_type": "idea", "color": "#438dd5", "group": "Internet Banking System"},
+    {"id": "db", "x": 160, "y": 560, "width": 240, "height": 120, "text": "[DB] Database\n[Container: PostgreSQL]\nStores accounts, transactions, audit.", "node_type": "text", "color": "#06b6d4", "group": "Internet Banking System"},
+    {"id": "email", "x": 560, "y": 180, "width": 220, "height": 100, "text": "[External] E-mail System\nThe internal Microsoft Exchange system.", "node_type": "text", "color": "#9ca3af"},
+    {"id": "mainframe", "x": 560, "y": 360, "width": 240, "height": 110, "text": "[External] Mainframe Banking System\nStores core banking information.", "node_type": "text", "color": "#9ca3af"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "customer", "to_node": "spa", "label": "Uses [HTTPS]"},
+    {"id": "e2", "from_node": "customer", "to_node": "mobile", "label": "Uses"},
+    {"id": "e3", "from_node": "spa", "to_node": "api", "label": "Makes API calls to [JSON/HTTPS]"},
+    {"id": "e4", "from_node": "mobile", "to_node": "api", "label": "Makes API calls to [JSON/HTTPS]"},
+    {"id": "e5", "from_node": "api", "to_node": "db", "label": "Reads from and writes to [JDBC]"},
+    {"id": "e6", "from_node": "api", "to_node": "mainframe", "label": "Makes API calls to [XML/HTTPS]"},
+    {"id": "e7", "from_node": "api", "to_node": "email", "label": "Sends e-mail using [SMTP]"}
+  ]
+}

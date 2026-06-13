@@ -1,0 +1,21 @@
+{
+  "nodes": [
+    {"id": "title", "x": 0, "y": -150, "width": 520, "height": 90, "text": "# DFD (Level 1) — Order Processing\n\n*Data flow diagram · context + level-1 · edges carry **data packets** (nouns), never actions*", "node_type": "md"},
+    {"id": "legend", "x": 1100, "y": 380, "width": 320, "height": 280, "text": "## Legend\n\n- **🟩 Process** (`idea`) — number + verb name\n- **🟨 External entity** (`note`) — `«external»`, sits OUTSIDE the boundary\n- **🟦 Data store** (`text`) — `‹‹store›› Dn`\n- **→ Data flow** (edge) — labeled with the **data name** (a noun packet)\n- **┄ Boundary** = `group: system boundary`", "node_type": "md"},
+    {"id": "customer", "x": -360, "y": 100, "width": 200, "height": 110, "text": "«external» Customer", "node_type": "note", "color": "#f59e0b"},
+    {"id": "provider", "x": 1100, "y": 100, "width": 200, "height": 110, "text": "«external» Payment Provider", "node_type": "note", "color": "#f59e0b"},
+    {"id": "validate", "x": 0, "y": 100, "width": 220, "height": 110, "text": "1\nValidate Order", "node_type": "idea", "color": "#22c55e", "tags": ["level-1"], "group": "system boundary"},
+    {"id": "charge", "x": 350, "y": 100, "width": 220, "height": 110, "text": "2\nCharge Payment", "node_type": "idea", "color": "#22c55e", "tags": ["level-1"], "group": "system boundary"},
+    {"id": "d1", "x": 0, "y": 400, "width": 220, "height": 100, "text": "‹‹store›› D1 Orders", "node_type": "text", "color": "#06b6d4", "group": "system boundary"},
+    {"id": "d2", "x": 350, "y": 400, "width": 220, "height": 100, "text": "‹‹store›› D2 Payments", "node_type": "text", "color": "#06b6d4", "group": "system boundary"}
+  ],
+  "edges": [
+    {"id": "e1", "from_node": "customer", "to_node": "validate", "label": "order details"},
+    {"id": "e2", "from_node": "validate", "to_node": "d1", "label": "order record"},
+    {"id": "e3", "from_node": "validate", "to_node": "charge", "label": "valid order"},
+    {"id": "e4", "from_node": "charge", "to_node": "provider", "label": "charge request"},
+    {"id": "e5", "from_node": "provider", "to_node": "charge", "label": "payment status"},
+    {"id": "e6", "from_node": "charge", "to_node": "d2", "label": "payment record"},
+    {"id": "e7", "from_node": "charge", "to_node": "customer", "label": "invoice"}
+  ]
+}

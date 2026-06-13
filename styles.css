@@ -98,3 +98,99 @@ body {
 *::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ============================================================================
+   DOM chrome utility classes (Step 2) — ported from osint-workbench canvas.css.
+   Hover/focus accent + glow states live here because inline style= can't express
+   pseudo-classes. The brainstorm HUD keeps its own anchoring (top-right HUD,
+   bottom-left status line) — these classes carry visual props only.
+   ============================================================================ */
+
+/* HUD button cluster (top-right). Anchoring stays inline in app.rs. */
+.hud {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  z-index: 100;
+}
+
+.hud-btn {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 14px;
+  cursor: pointer;
+  font-family: var(--mono);
+  transition:
+    border-color 0.12s,
+    color 0.12s,
+    background 0.12s;
+}
+
+.hud-btn:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  color: var(--accent-bright);
+  background: var(--bg-hover);
+}
+
+.hud-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Generic pill (read-only meta chip). */
+.pill {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Active / "ready" state — electric accent with a soft glow (Gotham select). */
+.pill-ready {
+  color: var(--accent-bright);
+  border-color: var(--accent-line);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+/* Status line (bottom-left). Anchoring stays inline in app.rs. */
+.status-line {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+
+/* Modal / overlay panel frame. */
+.modal {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(3px);
+}
+
+/* Editable field inside a modal — lifted surface, accent focus. */
+.modal-input {
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+}
+
+.modal-input:focus {
+  border-color: var(--accent-line);
+}
+
+.modal-input::placeholder {
+  color: var(--text-faint);
+}

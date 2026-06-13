@@ -56,8 +56,9 @@ pub fn Minimap() -> impl IntoView {
             return;
         };
 
-        // Background.
-        c.set_fill_style_str("rgba(4, 8, 4, 0.92)");
+        // Background (= var(--bg-panel)). Canvas2D can't read CSS vars, so this
+        // mirrors the styles.css token as a literal.
+        c.set_fill_style_str("rgba(17, 22, 31, 0.94)");
         c.fill_rect(0.0, 0.0, MINIMAP_W, MINIMAP_H);
 
         let Some(bbox) = nodes_bounding_box(&current_board.nodes) else {
@@ -65,8 +66,9 @@ pub fn Minimap() -> impl IntoView {
         };
         let (scale, off_x, off_y) = minimap_transform(bbox, MINIMAP_W, MINIMAP_H, MINIMAP_PAD);
 
-        // Node rectangles.
-        c.set_fill_style_str("rgba(102, 204, 136, 0.55)");
+        // Node rectangles (accent @ 0.5 = var(--accent) #4c90f0; legible over the
+        // --bg-panel minimap surface).
+        c.set_fill_style_str("rgba(76, 144, 240, 0.5)");
         for n in &current_board.nodes {
             let x = n.x * scale + off_x;
             let y = n.y * scale + off_y;
@@ -82,7 +84,8 @@ pub fn Minimap() -> impl IntoView {
             let vy = cam.y * scale + off_y;
             let vrw = (vw / cam.zoom) * scale;
             let vrh = (vh / cam.zoom) * scale;
-            c.set_stroke_style_str("rgba(150, 255, 190, 0.95)");
+            // Viewport rect (accent @ 0.95 = var(--accent) #4c90f0).
+            c.set_stroke_style_str("rgba(76, 144, 240, 0.95)");
             c.set_line_width(1.5);
             c.stroke_rect(vx, vy, vrw, vrh);
         }
@@ -129,8 +132,8 @@ pub fn Minimap() -> impl IntoView {
 
     let container_style = format!(
         "position: fixed; bottom: 40px; right: 12px; width: {}px; height: {}px; \
-         z-index: 90; border: 1px solid #2a4a3a; border-radius: 4px; \
-         box-shadow: 0 2px 12px rgba(0,0,0,0.5); overflow: hidden;",
+         z-index: 90; border: 1px solid var(--border); border-radius: var(--radius); \
+         box-shadow: var(--panel-shadow); overflow: hidden;",
         MINIMAP_W, MINIMAP_H
     );
 

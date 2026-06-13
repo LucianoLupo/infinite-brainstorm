@@ -2602,12 +2602,8 @@ pub fn App() -> impl IntoView {
         a.click();
     };
 
-    let button_style = "background: #0a0a0a; color: #66cc88; border: 1px solid #2a4a3a; \
-        padding: 6px 14px; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
-        font-size: 12px; cursor: pointer; border-radius: 4px;";
-
     view! {
-        <div style="width: 100vw; height: 100vh; overflow: hidden; background: #020202; position: relative;">
+        <div style="width: 100vw; height: 100vh; overflow: hidden; background: var(--bg); position: relative;">
             <canvas
                 node_ref=canvas_ref
                 tabindex="0"
@@ -2628,18 +2624,18 @@ pub fn App() -> impl IntoView {
             <ErrorBanner/>
             <SearchOverlay/>
             <Minimap/>
-            <div style="position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; z-index: 100;">
+            <div class="hud" style="position: fixed; top: 12px; right: 12px;">
                 <Show when=move || !is_tauri()>
-                    <button style=button_style on:click=on_upload>"Upload board.json"</button>
-                    <button style=button_style on:click=on_download>"Download board.json"</button>
+                    <button class="hud-btn" on:click=on_upload>"Upload board.json"</button>
+                    <button class="hud-btn" on:click=on_download>"Download board.json"</button>
                 </Show>
-                <button style=button_style on:click=on_export_png>"Export PNG"</button>
+                <button class="hud-btn" on:click=on_export_png>"Export PNG"</button>
             </div>
             <Show when=move || !is_tauri()>
                 <input type="file" accept=".json" node_ref=file_input_ref style="display:none"
                        on:change=on_file_selected />
             </Show>
-            <div style="position: fixed; bottom: 12px; left: 12px; color: #66cc88; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 11px; letter-spacing: 0.5px;">
+            <div class="status-line" style="position: fixed; bottom: 12px; left: 12px;">
                 "[DBLCLK] add/edit  [DRAG corner] resize  [SHIFT+DRAG] connect  [CMD+DRAG] box  [CMD+C] copy  [CMD+V] paste  [T] type  [DEL] delete  [CMD+Z] undo  [CMD+SHIFT+Z] redo  [CMD+F] search  [F] fit  [CMD+0] reset zoom  [CMD+A] select all"
             </div>
         </div>

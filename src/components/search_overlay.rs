@@ -93,20 +93,19 @@ pub fn SearchOverlay() -> impl IntoView {
     move || {
         sel_ctx.search_query.get().map(|query| {
             view! {
-                <div style="position: fixed; top: 16px; left: 50%; transform: translateX(-50%); \
-                            z-index: 250; background: #051005; border: 1px solid #2a4a3a; \
-                            border-radius: 6px; padding: 8px 10px; display: flex; align-items: center; \
-                            gap: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.5);">
-                    <span style="color: #66cc88; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
+                <div class="modal" style="position: fixed; top: 16px; left: 50%; transform: translateX(-50%); \
+                            z-index: 250; padding: 8px 10px; display: flex; align-items: center; \
+                            gap: 8px;">
+                    <span style="color: var(--text-dim); font-family: var(--mono); \
                                  font-size: 12px;">"search"</span>
                     <input
+                        class="modal-input"
                         type="text"
                         value=query
                         autofocus=true
                         placeholder="text, tag, or status…"
-                        style="background: #020202; color: #ccffdd; border: 1px solid #2a4a3a; \
-                               border-radius: 4px; outline: none; padding: 6px 10px; width: 280px; \
-                               font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; font-size: 13px;"
+                        style="padding: 6px 10px; width: 280px; \
+                               font-family: var(--mono); font-size: 13px;"
                         on:input=on_input
                         on:keydown=on_keydown
                     />

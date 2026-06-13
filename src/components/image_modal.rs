@@ -17,10 +17,10 @@ pub fn ImageModal() -> impl IntoView {
                 >
                     <button
                         style="position: fixed; top: 16px; right: 16px; z-index: 1001; \
-                               background: transparent; color: #66cc88; border: 1px solid #66cc88; \
+                               background: transparent; color: var(--accent-bright); border: 1px solid var(--accent-line); \
                                width: 32px; height: 32px; line-height: 1; cursor: pointer; \
-                               font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
-                               font-size: 18px; border-radius: 4px;"
+                               font-family: var(--mono); \
+                               font-size: 18px; border-radius: var(--radius);"
                         title="Close (Esc)"
                         on:click=move |ev: web_sys::MouseEvent| {
                             ev.stop_propagation();
@@ -32,7 +32,7 @@ pub fn ImageModal() -> impl IntoView {
                     <img
                         src=image_url
                         style="max-width: 90vw; max-height: 90vh; object-fit: contain; \
-                               border: 1px solid #44dd66; box-shadow: 0 0 30px rgba(68, 221, 102, 0.3);"
+                               border: 1px solid var(--border-strong); box-shadow: 0 0 30px var(--accent-glow);"
                     />
                 </div>
             }

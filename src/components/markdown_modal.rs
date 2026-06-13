@@ -23,17 +23,16 @@ pub fn MarkdownModal() -> impl IntoView {
                     on:click=move |_| ctx.set_modal_md.set(None)
                 >
                     <div
+                        class="modal"
                         style="width: 90vw; max-width: 800px; height: 80vh; \
-                               background: #020202; border: 1px solid #44dd66; \
-                               box-shadow: 0 0 30px rgba(68, 221, 102, 0.3); \
                                padding: 24px; display: flex; flex-direction: column; \
-                               font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
-                               color: #ccffdd; font-size: 14px; line-height: 1.6;"
+                               font-family: var(--mono); \
+                               color: var(--text); font-size: 14px; line-height: 1.6;"
                         on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()
                     >
                         <div
                             style="margin-bottom: 16px; padding-bottom: 16px; \
-                                   border-bottom: 1px solid #44dd66; \
+                                   border-bottom: 1px solid var(--border); \
                                    display: flex; justify-content: flex-end; gap: 8px;"
                         >
                             {move || {
@@ -42,7 +41,7 @@ pub fn MarkdownModal() -> impl IntoView {
                                 if is_editing {
                                     view! {
                                         <button
-                                            style="background: transparent; color: #66cc88; border: 1px solid #66cc88; \
+                                            style="background: transparent; color: var(--accent-bright); border: 1px solid var(--accent-line); \
                                                    padding: 8px 16px; cursor: pointer; \
                                                    font-family: inherit; font-size: 12px;"
                                             on:click=move |_| {
@@ -52,7 +51,7 @@ pub fn MarkdownModal() -> impl IntoView {
                                             "Cancel"
                                         </button>
                                         <button
-                                            style="background: #44dd66; color: #020202; border: none; \
+                                            style="background: var(--accent); color: var(--bg); border: none; \
                                                    padding: 8px 16px; cursor: pointer; \
                                                    font-family: inherit; font-size: 12px; font-weight: bold;"
                                             on:click=move |_| {
@@ -83,12 +82,12 @@ pub fn MarkdownModal() -> impl IntoView {
 
                                     if is_md_link {
                                         view! {
-                                            <span style="color: #66cc88; font-size: 11px;">"[read-only]"</span>
+                                            <span style="color: var(--accent-bright); font-size: 11px;">"[read-only]"</span>
                                         }.into_any()
                                     } else {
                                         view! {
                                             <button
-                                                style="background: #44dd66; color: #020202; border: none; \
+                                                style="background: var(--accent); color: var(--bg); border: none; \
                                                        padding: 8px 16px; cursor: pointer; \
                                                        font-family: inherit; font-size: 12px; font-weight: bold;"
                                                 on:click=move |_| {
@@ -108,7 +107,7 @@ pub fn MarkdownModal() -> impl IntoView {
                                 }
                             }}
                             <button
-                                style="background: transparent; color: #66cc88; border: 1px solid #66cc88; \
+                                style="background: transparent; color: var(--accent-bright); border: 1px solid var(--accent-line); \
                                        width: 34px; padding: 8px 0; cursor: pointer; \
                                        font-family: inherit; font-size: 16px; line-height: 1;"
                                 title="Close (Esc)"
@@ -126,11 +125,10 @@ pub fn MarkdownModal() -> impl IntoView {
                                 if is_editing {
                                     view! {
                                         <textarea
-                                            style="width: 100%; height: 100%; background: #020202; \
-                                                   color: #ccffdd; border: 1px solid #33aa55; \
+                                            class="modal-input"
+                                            style="width: 100%; height: 100%; \
                                                    font-family: inherit; font-size: 14px; \
-                                                   padding: 12px; box-sizing: border-box; resize: none; \
-                                                   outline: none;"
+                                                   padding: 12px; box-sizing: border-box; resize: none;"
                                             prop:value=move || ctx.md_edit_text.get()
                                             on:input=move |ev| {
                                                 let value = event_target_value(&ev);

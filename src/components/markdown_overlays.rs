@@ -90,8 +90,8 @@ pub fn MarkdownOverlays() -> impl IntoView {
                              width: {}px; height: {}px; overflow: hidden; \
                              transform: scale({}); transform-origin: top left; \
                              padding: {}px; box-sizing: border-box; \
-                             color: #ccffdd; font-size: 12px; line-height: 1.4; \
-                             font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
+                             color: var(--text); font-size: 12px; line-height: 1.4; \
+                             font-family: var(--mono); \
                              pointer-events: none;",
                             screen_x, screen_y + label_height,
                             base_w, base_h,

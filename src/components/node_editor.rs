@@ -68,10 +68,10 @@ pub fn NodeEditor() -> impl IntoView {
                             autofocus=true
                             style=format!(
                                 "position: absolute; left: {}px; top: {}px; width: {}px; height: {}px; \
-                                 font-size: {}px; background: #020202; resize: none; \
-                                 color: #ccffdd; border: 1px solid #aaffbb; outline: none; \
-                                 box-sizing: border-box; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
-                                 text-shadow: 0 0 6px #aaffbb; padding: 8px;",
+                                 font-size: {}px; background: var(--bg-elev); resize: none; \
+                                 color: var(--text); border: 1px solid var(--accent); outline: none; \
+                                 box-sizing: border-box; font-family: var(--mono); \
+                                 text-shadow: 0 0 6px var(--accent); padding: 8px;",
                                 screen_x, screen_y, screen_w, screen_h, font_size
                             )
                             on:blur=on_blur_textarea
@@ -128,10 +128,10 @@ pub fn NodeEditor() -> impl IntoView {
                             autofocus=true
                             style=format!(
                                 "position: absolute; left: {}px; top: {}px; width: {}px; height: {}px; \
-                                 font-size: {}px; text-align: center; background: #020202; \
-                                 color: #ccffdd; border: 1px solid #aaffbb; outline: none; \
-                                 box-sizing: border-box; font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace; \
-                                 text-shadow: 0 0 6px #aaffbb;",
+                                 font-size: {}px; text-align: center; background: var(--bg-elev); \
+                                 color: var(--text); border: 1px solid var(--accent); outline: none; \
+                                 box-sizing: border-box; font-family: var(--mono); \
+                                 text-shadow: 0 0 6px var(--accent);",
                                 screen_x, screen_y, screen_w, screen_h, font_size
                             )
                             on:blur=on_blur

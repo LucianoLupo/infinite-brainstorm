@@ -10,6 +10,11 @@ export const meta = {
   ],
 }
 
+// args may arrive as a JSON string (tool-call quirk) or an object — normalize.
+const OPTS = typeof args === 'string'
+  ? (() => { try { return JSON.parse(args) } catch { return {} } })()
+  : (args || {})
+
 const REPO = '/Users/lucianolupo/projects/infinite-brainstorm'
 const BRANCH = 'feat/osint-gotham-reskin'
 const PLAN = 'plans/2026-06-12-osint-gotham-reskin.md'
@@ -151,6 +156,14 @@ log(`planDelta: proceed=${delta.proceed}, ${delta.blockers.length} blockers, ${d
 if (!delta.proceed) {
   log('BLOCKED — stopping before implementation. Returning the delta for user review.')
   return { stoppedAt: 'audit', tasklist, audits, delta }
+}
+
+// Plan+audit-only gate: when args.stopAfterAudit is set, halt here for human review.
+// The run stays resumable — re-run with resumeFromRunId and no flag to continue into
+// Implement (Plan+Audit return from cache, Implement runs live).
+if (OPTS.stopAfterAudit) {
+  log('stopAfterAudit set — halting after audit for review. Implementation deferred to a follow-up run.')
+  return { stoppedAt: 'audit-requested', tasklist, audits, delta }
 }
 
 // ---------------------------------------------------------------------------

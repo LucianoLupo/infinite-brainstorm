@@ -9,29 +9,43 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlImageElement};
 
-const BG_COLOR: &str = "#020202";
-const GRID_COLOR: &str = "#0a1a0a";
-const BORDER_COLOR: &str = "#44dd66";
-const BORDER_SELECTED: &str = "#aaffbb";
-const TEXT_COLOR: &str = "#ccffdd";
-const TEXT_DIM: &str = "#66cc88";
-const NODE_BG_TEXT: &str = "#040804";
-const NODE_BG_IDEA: &str = "#041004";
-const NODE_BG_NOTE: &str = "#0a0a04";
-const NODE_BG_IMAGE: &str = "#040408";
-const NODE_BG_MD: &str = "#080408";
-const NODE_BG_LINK: &str = "#040410";
-const EDGE_COLOR: &str = "#33aa55";
-const EDGE_PREVIEW: &str = "#aaffbb";
-const SELECT_BOX_FILL: &str = "rgba(100, 200, 130, 0.15)";
-const SELECT_BOX_STROKE: &str = "#aaffbb";
-const RESIZE_HANDLE_COLOR: &str = "#aaffbb";
-const RESIZE_HANDLE_BG: &str = "#020202";
-const EDGE_LABEL_BG: &str = "rgba(2, 2, 2, 0.85)";
-const GROUP_BG: &str = "rgba(50, 170, 85, 0.06)";
-const GROUP_BORDER: &str = "rgba(50, 170, 85, 0.25)";
-const GROUP_LABEL_COLOR: &str = "#448855";
-const FONT: &str = "JetBrains Mono, Fira Code, Consolas, monospace";
+// Gotham-ops palette — mirrors styles.css :root (the DOM source of truth).
+// canvas2D can't read CSS vars, so these hold literal hex/rgba equivalents;
+// each `= var(--x)` comment pins it to the token so the two can't drift.
+const BG_COLOR: &str = "#0a0e14"; // = var(--bg)
+const GRID_MINOR: &str = "rgba(122, 142, 173, 0.08)"; // = var(--grid)
+const BORDER_COLOR: &str = "rgba(122, 142, 173, 0.32)"; // = var(--border-strong)
+const BORDER_SELECTED: &str = "#4c90f0"; // = var(--accent)
+const TEXT_COLOR: &str = "#c8d2e0"; // = var(--text)
+const TEXT_DIM: &str = "#8a97a8"; // = var(--text-dim)
+
+// Node surfaces — near-monochrome blue-gray family (fallback to OSINT's per-kind
+// accent left-stripe; see PR note). Differences are 1-6 points per channel, so
+// at typical zoom they read near-uniform: a conscious fidelity trade vs OSINT's
+// legible per-kind stripe, kept colors-only for this pass.
+const NODE_BG_TEXT: &str = "#11161f"; // = var(--bg-solid)
+const NODE_BG_IDEA: &str = "#121826";
+const NODE_BG_NOTE: &str = "#141620";
+const NODE_BG_IMAGE: &str = "#0f141d";
+const NODE_BG_MD: &str = "#15131f";
+const NODE_BG_LINK: &str = "#101522";
+const EDGE_COLOR: &str = "rgba(76, 144, 240, 0.45)"; // = var(--accent-line)
+const EDGE_PREVIEW: &str = "#6ba8ff"; // = var(--accent-bright)
+const SELECT_BOX_FILL: &str = "rgba(76, 144, 240, 0.12)"; // = var(--accent-bg)
+const SELECT_BOX_STROKE: &str = "#4c90f0"; // = var(--accent)
+const RESIZE_HANDLE_COLOR: &str = "#6ba8ff"; // = var(--accent-bright)
+const RESIZE_HANDLE_BG: &str = "#0a0e14"; // = var(--bg)
+const EDGE_LABEL_BG: &str = "rgba(17, 22, 31, 0.94)"; // = var(--bg-panel)
+const GROUP_BG: &str = "rgba(76, 144, 240, 0.06)"; // = --accent @ 6% (rgb 76,144,240)
+const GROUP_BORDER: &str = "rgba(76, 144, 240, 0.25)"; // = --accent @ 25% (rgb 76,144,240)
+const GROUP_LABEL_COLOR: &str = "#8a97a8"; // = var(--text-dim)
+
+// Inter for proportional labels/meta (width is non-load-bearing there).
+const FONT_SANS: &str = "Inter, system-ui, sans-serif";
+// Mono for node body text (handles/IDs/dim meta too). Node body wrap math
+// (`wrap_text_cached`) is measure_text-sensitive, so body text stays MONO to
+// keep line breaks byte-identical to the pre-reskin layout.
+const FONT_MONO: &str = "ui-monospace, 'SF Mono', Menlo, Consolas, monospace";
 
 /// Tri-state for an async-loaded cache entry. Replaces the previous
 /// `Option<T>` (where `None` ambiguously meant "loading") so a load *failure*
@@ -76,6 +90,10 @@ pub const IMAGE_CACHE_CAP: usize = 64;
 /// `width` and `font_px` are bucketed to whole pixels (`u32`) so sub-pixel
 /// camera jitter doesn't thrash the cache, and `node_id` lets us evict a node's
 /// entry when it is deleted.
+// The font family for all wrapped body text is implicitly `FONT_MONO` (set via
+// `set_font_px` before each cache-miss `measure_text`); the key carries no family
+// discriminant because body text is single-family. Add one only if body text ever
+// becomes multi-family.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct WrapKey {
     node_id: String,
@@ -328,7 +346,7 @@ fn draw_groups(ctx: &CanvasRenderingContext2d, board: &Board, camera: &Camera) {
         ctx.stroke_rect(sx, sy, w, h);
 
         ctx.set_fill_style_str(GROUP_LABEL_COLOR);
-        ctx.set_font(&format!("{}px {}", label_font_size, FONT));
+        ctx.set_font(&format!("{}px {}", label_font_size, FONT_SANS));
         ctx.set_text_align("left");
         ctx.set_text_baseline("top");
         let label_pad = 4.0 * camera.zoom;
@@ -342,7 +360,7 @@ fn draw_grid(ctx: &CanvasRenderingContext2d, camera: &Camera, width: f64, height
         return;
     }
 
-    ctx.set_stroke_style_str(GRID_COLOR);
+    ctx.set_stroke_style_str(GRID_MINOR);
     ctx.set_line_width(1.0);
 
     let offset_x = (camera.x * camera.zoom) % grid_size;
@@ -481,7 +499,7 @@ fn draw_node(
     };
     ctx.set_fill_style_str(TEXT_DIM);
     let small_font = (9.0 * camera.zoom).max(6.0);
-    ctx.set_font(&format!("{}px {}", small_font, FONT));
+    ctx.set_font(&format!("{}px {}", small_font, FONT_SANS));
     ctx.set_text_align("left");
     ctx.set_text_baseline("top");
     let pad = 4.0 * camera.zoom;
@@ -504,7 +522,7 @@ fn draw_node(
     if !node.tags.is_empty() {
         let tags_text = node.tags.join(", ");
         let tag_font = (8.0 * camera.zoom).max(5.0);
-        ctx.set_font(&format!("{}px {}", tag_font, FONT));
+        ctx.set_font(&format!("{}px {}", tag_font, FONT_SANS));
         ctx.set_text_align("left");
         ctx.set_text_baseline("bottom");
         let _ = ctx.fill_text_with_max_width(
@@ -577,7 +595,7 @@ fn draw_image_content(
             let truncated = truncate_filename(filename);
             ctx.set_fill_style_str(TEXT_DIM);
             let small_font = (9.0 * camera.zoom).max(6.0);
-            ctx.set_font(&format!("{}px {}", small_font, FONT));
+            ctx.set_font(&format!("{}px {}", small_font, FONT_SANS));
             ctx.set_text_align("right");
             ctx.set_text_baseline("top");
             let _ = ctx.fill_text(
@@ -590,7 +608,7 @@ fn draw_image_content(
             // Image fetch in progress
             ctx.set_fill_style_str(TEXT_DIM);
             let font_size = (12.0 * camera.zoom).max(8.0);
-            ctx.set_font(&format!("{}px {}", font_size, FONT));
+            ctx.set_font(&format!("{}px {}", font_size, FONT_SANS));
             ctx.set_text_align("center");
             ctx.set_text_baseline("middle");
             let _ = ctx.fill_text(
@@ -603,7 +621,7 @@ fn draw_image_content(
             // Fetch failed — distinct from loading so the user sees the error.
             ctx.set_fill_style_str(TEXT_DIM);
             let font_size = (12.0 * camera.zoom).max(8.0);
-            ctx.set_font(&format!("{}px {}", font_size, FONT));
+            ctx.set_font(&format!("{}px {}", font_size, FONT_SANS));
             ctx.set_text_align("center");
             ctx.set_text_baseline("middle");
             let _ = ctx.fill_text(
@@ -616,7 +634,7 @@ fn draw_image_content(
             // Image not in cache yet, show placeholder
             ctx.set_fill_style_str(TEXT_DIM);
             let font_size = (12.0 * camera.zoom).max(8.0);
-            ctx.set_font(&format!("{}px {}", font_size, FONT));
+            ctx.set_font(&format!("{}px {}", font_size, FONT_SANS));
             ctx.set_text_align("center");
             ctx.set_text_baseline("middle");
             let _ = ctx.fill_text(
@@ -692,7 +710,7 @@ fn draw_link_content(
                 .clone()
                 .unwrap_or_else(|| url.split('/').nth(2).unwrap_or(url).to_string());
             ctx.set_fill_style_str(TEXT_DIM);
-            ctx.set_font(&format!("{}px {}", domain_font_size, FONT));
+            ctx.set_font(&format!("{}px {}", domain_font_size, FONT_SANS));
             ctx.set_text_align("right");
             ctx.set_text_baseline("bottom");
             let _ = ctx.fill_text(&domain, screen_x + screen_width - padding, content_bottom);
@@ -700,7 +718,7 @@ fn draw_link_content(
         Some(LoadState::Loading) => {
             ctx.set_fill_style_str(TEXT_DIM);
             let font_size = (12.0 * camera.zoom).max(8.0);
-            ctx.set_font(&format!("{}px {}", font_size, FONT));
+            ctx.set_font(&format!("{}px {}", font_size, FONT_SANS));
             ctx.set_text_align("center");
             ctx.set_text_baseline("middle");
             let _ = ctx.fill_text(
@@ -714,7 +732,7 @@ fn draw_link_content(
         Some(LoadState::Failed) | None => {
             ctx.set_fill_style_str(TEXT_DIM);
             let font_size = (10.0 * camera.zoom).max(7.0);
-            ctx.set_font(&format!("{}px {}", font_size, FONT));
+            ctx.set_font(&format!("{}px {}", font_size, FONT_SANS));
             ctx.set_text_align("center");
             ctx.set_text_baseline("middle");
             let _ = ctx.fill_text_with_max_width(
@@ -843,7 +861,7 @@ fn draw_edge(
             let mid_x = (from_sx + to_sx) / 2.0;
             let mid_y = (from_sy + to_sy) / 2.0;
             let label_font_size = (10.0 * camera.zoom).max(7.0);
-            ctx.set_font(&format!("{}px {}", label_font_size, FONT));
+            ctx.set_font(&format!("{}px {}", label_font_size, FONT_SANS));
             let text_metrics = ctx.measure_text(label).ok();
             let text_w = text_metrics.map(|m| m.width()).unwrap_or(40.0);
             let pill_h = label_font_size + 6.0;
@@ -1068,21 +1086,21 @@ fn draw_wrapped_text(
 }
 
 thread_local! {
-    /// Caches the last `"<px>px <FONT>"` string set via [`set_font_px`]. The font
-    /// string only changes when the bucketed pixel size changes (i.e. on zoom),
-    /// so a pan frame builds zero font strings even across many nodes.
+    /// Caches the last `"<px>px <FONT_MONO>"` string set via [`set_font_px`]. The
+    /// font string only changes when the bucketed pixel size changes (i.e. on
+    /// zoom), so a pan frame builds zero font strings even across many nodes.
     static LAST_FONT_PX: Cell<u32> = const { Cell::new(0) };
     static LAST_FONT_STR: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
-/// Set the canvas font to `<font_px>px <FONT>`, reusing the previously-built
+/// Set the canvas font to `<font_px>px <FONT_MONO>`, reusing the previously-built
 /// string when the pixel size is unchanged from the last call. Hoists the
 /// per-node `format!` out of the hot path: within a frame every text node shares
 /// the same bucketed size, so the string is formatted at most once per zoom level.
 fn set_font_px(ctx: &CanvasRenderingContext2d, font_px: u32) {
     let unchanged = LAST_FONT_PX.with(|p| p.get() == font_px);
     if !unchanged {
-        let s = format!("{}px {}", font_px, FONT);
+        let s = format!("{}px {}", font_px, FONT_MONO);
         LAST_FONT_PX.with(|p| p.set(font_px));
         LAST_FONT_STR.with(|f| *f.borrow_mut() = s);
     }

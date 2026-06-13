@@ -56,11 +56,11 @@ Full JSON Schema: [board.schema.json](board.schema.json).
 | Type | Use Case | Text Field |
 |------|----------|------------|
 | `text` | Default, simple text | Plain text |
-| `idea` | Highlighted concepts (green) | Plain text |
-| `note` | Annotations, comments (amber) | Plain text |
-| `image` | Embedded images (blue) | Local path or URL |
-| `md` | Markdown content (purple) | Markdown text |
-| `link` | URL with preview (indigo) | URL or local `.md` path |
+| `idea` | Highlighted concepts | Plain text |
+| `note` | Annotations, comments | Plain text |
+| `image` | Embedded images | Local path or URL |
+| `md` | Markdown content | Markdown text |
+| `link` | URL with preview | URL or local `.md` path |
 
 **Link nodes** with local `.md` file paths (absolute, `file://`, or `~/`) render as read-only markdown, enabling seamless Obsidian vault integration.
 

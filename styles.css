@@ -1,6 +1,7 @@
 /* ============================================================================
    Gotham-ops theme — DOM source of truth (token system)
-   Ported verbatim from osint-workbench tauri-app/src/App.css :root. The canvas
+   Ported from osint-workbench tauri-app/src/App.css :root, trimmed to the tokens
+   this app consumes (OSINT's status-tier / major-grid tokens are omitted). The canvas
    renderer (src/canvas.rs) mirrors these as literal hex/rgba consts because the
    canvas2D context can't read CSS vars; each canvas const is commented with its
    "= var(--x)" equivalent so the two palettes can't drift.
@@ -22,8 +23,7 @@
   /* lines */
   --border: rgba(122, 142, 173, 0.16);
   --border-strong: rgba(122, 142, 173, 0.32);
-  --grid: rgba(122, 142, 173, 0.08); /* minor graticule */
-  --grid-major: rgba(122, 142, 173, 0.16); /* major graticule */
+  --grid: rgba(122, 142, 173, 0.08); /* canvas graticule (single tier) */
 
   /* text */
   --text: #c8d2e0;
@@ -38,22 +38,14 @@
   --accent-line: rgba(76, 144, 240, 0.45);
   --accent-glow: rgba(76, 144, 240, 0.3);
 
-  /* intents / status (used sparingly) */
-  --ok: #32a467;
-  --ok-line: rgba(50, 164, 103, 0.45);
-  --warn: #ec9a3c;
-  --warn-line: rgba(236, 154, 60, 0.45);
-  --warn2: #d9822b;
-  --warn2-line: rgba(217, 130, 43, 0.45);
+  /* intent — danger only (the error banner); OSINT's ok/warn/violet tiers are unused here */
   --danger: #e76a6e;
   --danger-line: rgba(231, 106, 110, 0.5);
   --danger-text: #fad7d7;
   --danger-bg: rgba(98, 25, 27, 0.92);
-  --violet: #ad8af0;
 
   /* shape — hard edges (Gotham: fully square, no rounding) */
   --radius: 0;
-  --radius-lg: 0;
   --panel-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
 
   /* type */
@@ -140,25 +132,6 @@ body {
 .hud-btn:disabled {
   opacity: 0.45;
   cursor: default;
-}
-
-/* Generic pill (read-only meta chip). */
-.pill {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-dim);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 4px 10px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Active / "ready" state — electric accent with a soft glow (Gotham select). */
-.pill-ready {
-  color: var(--accent-bright);
-  border-color: var(--accent-line);
-  box-shadow: 0 0 8px var(--accent-glow);
 }
 
 /* Status line (bottom-left). Anchoring stays inline in app.rs. */

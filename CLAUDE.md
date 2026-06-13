@@ -49,7 +49,7 @@ With no subcommand, `brainstorm` launches the desktop app. The `validate`/`query
 {"id": "uuid", "x": 0, "y": 0, "width": 200, "height": 100, "text": "Hello", "node_type": "idea", "color": "#ff6600", "tags": ["urgent"], "status": "todo", "group": "g1", "priority": 1}
 ```
 
-**Node types:** `"text"` (gray), `"idea"` (green), `"note"` (amber), `"image"` (blue), `"md"` (purple), `"link"` (indigo)
+**Node types:** `"text"`, `"idea"`, `"note"`, `"image"`, `"md"`, `"link"` — under the Gotham theme all render as near-uniform blue-gray surfaces (per-type background differs by only a few points/channel); per-node color is carried by the optional `color` override, not the type.
 
 **Edge:** `{"id": "uuid", "from_node": "node-id-1", "to_node": "node-id-2"}`
 
@@ -406,13 +406,13 @@ jq '.nodes[] | select(.id == "node-id") | .status = "done"' board.json
 jq '.nodes[] | select(.group == "cluster-a") | .color = "#ff6600"' board.json
 ```
 
-**Node types and colors:**
-- `"text"` → Dark green background (`#040804`) - default
-- `"idea"` → Slightly brighter green (`#041004`)
-- `"note"` → Amber-green (`#0a0a04`)
-- `"image"` → Dark blue (`#040408`) - displays image thumbnail, double-click opens 90% modal
-- `"md"` → Dark purple (`#080408`) - renders markdown content
-- `"link"` → Dark indigo (`#040410`) - displays URL preview card with og:image, title, description
+**Node types and colors** (Gotham theme — near-uniform blue-gray surfaces; the per-type background differs by only a few points/channel, so don't expect strong per-type color separation — use the optional `color` override for that):
+- `"text"` → blue-gray base surface (`#11161f`, = `--bg-solid`) - default
+- `"idea"` → blue-gray (`#121826`)
+- `"note"` → blue-gray (`#141620`)
+- `"image"` → blue-gray (`#0f141d`) - displays image thumbnail, double-click opens 90% modal
+- `"md"` → blue-gray (`#15131f`) - renders markdown content
+- `"link"` → blue-gray (`#101522`) - displays URL preview card with og:image, title, description
 
 **Image node:** Set `text` field to image path (local) or URL. Local paths are auto-converted to `asset://localhost/` URLs.
 

@@ -72,6 +72,67 @@ impl NodeType {
             NodeType::Link | NodeType::Unknown => NodeType::Text,
         }
     }
+
+    /// The node's surface (background) fill color in the Gotham palette. Mirrors
+    /// the `match` in the canvas renderer's `draw_node` so the headless SVG
+    /// exporter and the live canvas can't drift (pinned by a palette-equality
+    /// test). `Unknown` falls back to the neutral `text` surface.
+    pub fn bg_color(self) -> &'static str {
+        match self {
+            NodeType::Idea => palette::NODE_BG_IDEA,
+            NodeType::Note => palette::NODE_BG_NOTE,
+            NodeType::Image => palette::NODE_BG_IMAGE,
+            NodeType::Md => palette::NODE_BG_MD,
+            NodeType::Link => palette::NODE_BG_LINK,
+            NodeType::Text | NodeType::Unknown => palette::NODE_BG_TEXT,
+        }
+    }
+
+    /// The `[TYPE]` corner label drawn on the node (e.g. `[IDEA]`, `[MD]`).
+    /// Mirrors the `type_indicator` match in the canvas renderer; `Unknown`
+    /// renders as `[TEXT]` (the neutral fallback).
+    pub fn label(self) -> &'static str {
+        match self {
+            NodeType::Idea => "[IDEA]",
+            NodeType::Note => "[NOTE]",
+            NodeType::Image => "[IMAGE]",
+            NodeType::Md => "[MD]",
+            NodeType::Link => "[LINK]",
+            NodeType::Text | NodeType::Unknown => "[TEXT]",
+        }
+    }
+}
+
+/// Shared Gotham-ops color palette. These are the STATIC subset of the canvas
+/// renderer's private consts (`src/canvas.rs`) that the headless SVG exporter
+/// also needs — held here as the single source of truth so the two renderers
+/// can't drift (a palette-equality test in the backend pins them equal). The
+/// values are literal hex/rgba equivalents of the `styles.css :root` tokens,
+/// copied verbatim (spaces inside `rgba(...)` included) from canvas.rs.
+pub mod palette {
+    /// Canvas background. = `var(--bg)`.
+    pub const BG_COLOR: &str = "#0a0e14";
+    /// Default `text`/`unknown` node surface. = `var(--bg-solid)`.
+    pub const NODE_BG_TEXT: &str = "#11161f";
+    pub const NODE_BG_IDEA: &str = "#121826";
+    pub const NODE_BG_NOTE: &str = "#141620";
+    pub const NODE_BG_IMAGE: &str = "#0f141d";
+    pub const NODE_BG_MD: &str = "#15131f";
+    pub const NODE_BG_LINK: &str = "#101522";
+    /// Unselected node border. = `var(--border-strong)`.
+    pub const BORDER_COLOR: &str = "rgba(122, 142, 173, 0.32)";
+    /// Dim/meta text. = `var(--text-dim)`.
+    pub const TEXT_DIM: &str = "#8a97a8";
+    /// Edge line + arrowhead. = `var(--accent-line)`.
+    pub const EDGE_COLOR: &str = "rgba(76, 144, 240, 0.45)";
+    /// Edge-label pill background. = `var(--bg-panel)`.
+    pub const EDGE_LABEL_BG: &str = "rgba(17, 22, 31, 0.94)";
+    /// Group box fill. = `--accent` @ 6%.
+    pub const GROUP_BG: &str = "rgba(76, 144, 240, 0.06)";
+    /// Group box border. = `--accent` @ 25%.
+    pub const GROUP_BORDER: &str = "rgba(76, 144, 240, 0.25)";
+    /// Group label text. = `var(--text-dim)`.
+    pub const GROUP_LABEL_COLOR: &str = "#8a97a8";
 }
 
 impl std::str::FromStr for NodeType {
@@ -465,6 +526,75 @@ impl Camera {
     }
 }
 
+/// Axis-aligned bounding box `(min_x, min_y, max_x, max_y)` enclosing every node
+/// (each node spans `x..x+width`, `y..y+height`). Returns `None` for an empty
+/// slice. Pure so fit-to-view math is unit-testable without a canvas.
+pub fn nodes_bounding_box(nodes: &[Node]) -> Option<(f64, f64, f64, f64)> {
+    let mut iter = nodes.iter();
+    let first = iter.next()?;
+    let mut min_x = first.x;
+    let mut min_y = first.y;
+    let mut max_x = first.x + first.width;
+    let mut max_y = first.y + first.height;
+    for n in iter {
+        min_x = min_x.min(n.x);
+        min_y = min_y.min(n.y);
+        max_x = max_x.max(n.x + n.width);
+        max_y = max_y.max(n.y + n.height);
+    }
+    Some((min_x, min_y, max_x, max_y))
+}
+
+/// Compute a [`Camera`] that frames `bbox` within a `canvas_w` x `canvas_h`
+/// viewport, leaving ~`margin_frac` (e.g. 0.1 = 10%) padding on every side. The
+/// zoom fits the larger relative dimension and is clamped to the app's `0.1..=5.0`
+/// range; the camera origin is positioned so the padded box is centered.
+///
+/// Pure: takes the box + viewport, returns a Camera — no DOM, easy to test.
+pub fn fit_camera(
+    bbox: (f64, f64, f64, f64),
+    canvas_w: f64,
+    canvas_h: f64,
+    margin_frac: f64,
+) -> Camera {
+    let (min_x, min_y, max_x, max_y) = bbox;
+    let box_w = (max_x - min_x).max(1.0);
+    let box_h = (max_y - min_y).max(1.0);
+
+    // Pad the box on all sides so nodes don't touch the viewport edge.
+    let pad_x = box_w * margin_frac;
+    let pad_y = box_h * margin_frac;
+    let padded_w = box_w + pad_x * 2.0;
+    let padded_h = box_h + pad_y * 2.0;
+
+    // Guard a degenerate viewport (e.g. canvas not yet laid out) so we never
+    // divide by zero or produce a non-finite zoom.
+    let cw = if canvas_w.is_finite() && canvas_w > 0.0 {
+        canvas_w
+    } else {
+        1.0
+    };
+    let ch = if canvas_h.is_finite() && canvas_h > 0.0 {
+        canvas_h
+    } else {
+        1.0
+    };
+
+    let zoom = (cw / padded_w).min(ch / padded_h).clamp(0.1, 5.0);
+
+    // Center the padded box: world coords of the viewport's top-left corner.
+    let center_x = (min_x + max_x) / 2.0;
+    let center_y = (min_y + max_y) / 2.0;
+    let cam_x = center_x - (cw / zoom) / 2.0;
+    let cam_y = center_y - (ch / zoom) / 2.0;
+
+    Camera {
+        x: cam_x,
+        y: cam_y,
+        zoom,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,6 +738,91 @@ mod tests {
             let (wx, wy) = cam.screen_to_world(sx, sy);
             assert!((wx - 500.0).abs() < 1e-10);
             assert!((wy - 600.0).abs() < 1e-10);
+        }
+    }
+
+    mod bounding_box_tests {
+        use super::*;
+
+        #[test]
+        fn empty_slice_is_none() {
+            assert!(nodes_bounding_box(&[]).is_none());
+        }
+
+        #[test]
+        fn single_node_box_is_its_rect() {
+            let n = Node::new("n".to_string(), 10.0, 20.0, "".to_string());
+            // Default 200x100.
+            let bbox = nodes_bounding_box(std::slice::from_ref(&n)).unwrap();
+            assert_eq!(bbox, (10.0, 20.0, 210.0, 120.0));
+        }
+
+        #[test]
+        fn spans_all_nodes_including_far_outlier() {
+            let near = Node::new("a".to_string(), 0.0, 0.0, "".to_string());
+            let far = Node::new("b".to_string(), 50000.0, 50000.0, "".to_string());
+            let bbox = nodes_bounding_box(&[near, far]).unwrap();
+            assert_eq!(bbox.0, 0.0);
+            assert_eq!(bbox.1, 0.0);
+            assert_eq!(bbox.2, 50200.0);
+            assert_eq!(bbox.3, 50100.0);
+        }
+    }
+
+    mod fit_camera_tests {
+        use super::*;
+
+        #[test]
+        fn distant_node_lands_inside_viewport() {
+            // The verify gate's scenario: a node placed at (50000, 50000). After
+            // fit-to-view it must be visible — its center maps to a screen point
+            // inside the canvas.
+            let node = Node::new("n".to_string(), 50000.0, 50000.0, "".to_string());
+            let bbox = nodes_bounding_box(std::slice::from_ref(&node)).unwrap();
+            let (cw, ch) = (800.0, 600.0);
+            let cam = fit_camera(bbox, cw, ch, 0.1);
+
+            let (center_wx, center_wy) = node.center();
+            let (sx, sy) = cam.world_to_screen(center_wx, center_wy);
+            assert!(sx >= 0.0 && sx <= cw, "x off-screen: {sx}");
+            assert!(sy >= 0.0 && sy <= ch, "y off-screen: {sy}");
+        }
+
+        #[test]
+        fn zoom_is_clamped_to_range() {
+            // A tiny box would otherwise demand a huge zoom; clamp caps at 5.0.
+            let tiny = (0.0, 0.0, 1.0, 1.0);
+            let cam = fit_camera(tiny, 800.0, 600.0, 0.1);
+            assert!(cam.zoom <= 5.0 && cam.zoom >= 0.1);
+        }
+
+        #[test]
+        fn huge_box_clamps_to_min_zoom() {
+            let huge = (0.0, 0.0, 1_000_000.0, 1_000_000.0);
+            let cam = fit_camera(huge, 800.0, 600.0, 0.1);
+            assert_eq!(cam.zoom, 0.1);
+        }
+
+        #[test]
+        fn degenerate_viewport_does_not_panic() {
+            let bbox = (0.0, 0.0, 100.0, 100.0);
+            let cam = fit_camera(bbox, 0.0, 0.0, 0.1);
+            assert!(cam.zoom.is_finite() && cam.x.is_finite() && cam.y.is_finite());
+        }
+
+        #[test]
+        fn multi_node_box_is_centered() {
+            let a = Node::new("a".to_string(), 0.0, 0.0, "".to_string());
+            let b = Node::new("b".to_string(), 1000.0, 1000.0, "".to_string());
+            let bbox = nodes_bounding_box(&[a, b]).unwrap();
+            let (cw, ch) = (800.0, 600.0);
+            let cam = fit_camera(bbox, cw, ch, 0.1);
+            // Viewport center should map to the box center.
+            let box_cx = (bbox.0 + bbox.2) / 2.0;
+            let box_cy = (bbox.1 + bbox.3) / 2.0;
+            let (vx, vy) = cam.screen_to_world(cw / 2.0, ch / 2.0);
+            assert!((vx - box_cx).abs() < 1e-6, "x center off: {vx} vs {box_cx}");
+            assert!((vy - box_cy).abs() < 1e-6, "y center off: {vy} vs {box_cy}");
         }
     }
 
@@ -1785,6 +2000,45 @@ mod tests {
                 assert_eq!(NodeType::from_str(nt.as_str()).unwrap(), nt);
             }
             assert_eq!(NodeType::from_str("nope").unwrap(), NodeType::Unknown);
+        }
+    }
+
+    mod palette_tests {
+        use super::*;
+
+        #[test]
+        fn bg_color_maps_each_type() {
+            assert_eq!(NodeType::Text.bg_color(), "#11161f");
+            assert_eq!(NodeType::Idea.bg_color(), "#121826");
+            assert_eq!(NodeType::Note.bg_color(), "#141620");
+            assert_eq!(NodeType::Image.bg_color(), "#0f141d");
+            assert_eq!(NodeType::Md.bg_color(), "#15131f");
+            assert_eq!(NodeType::Link.bg_color(), "#101522");
+            // Unknown falls back to the neutral text surface.
+            assert_eq!(NodeType::Unknown.bg_color(), NodeType::Text.bg_color());
+        }
+
+        #[test]
+        fn label_maps_each_type() {
+            assert_eq!(NodeType::Text.label(), "[TEXT]");
+            assert_eq!(NodeType::Idea.label(), "[IDEA]");
+            assert_eq!(NodeType::Note.label(), "[NOTE]");
+            assert_eq!(NodeType::Image.label(), "[IMAGE]");
+            assert_eq!(NodeType::Md.label(), "[MD]");
+            assert_eq!(NodeType::Link.label(), "[LINK]");
+            // Unknown renders as the neutral text label.
+            assert_eq!(NodeType::Unknown.label(), "[TEXT]");
+        }
+
+        #[test]
+        fn rgba_constants_keep_canvas_spacing() {
+            // These must match canvas.rs byte-for-byte (spaces included) or the
+            // SVG output won't match the CSS-var source of truth.
+            assert_eq!(palette::BORDER_COLOR, "rgba(122, 142, 173, 0.32)");
+            assert_eq!(palette::EDGE_COLOR, "rgba(76, 144, 240, 0.45)");
+            assert_eq!(palette::EDGE_LABEL_BG, "rgba(17, 22, 31, 0.94)");
+            assert_eq!(palette::GROUP_BG, "rgba(76, 144, 240, 0.06)");
+            assert_eq!(palette::GROUP_BORDER, "rgba(76, 144, 240, 0.25)");
         }
     }
 

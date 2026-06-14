@@ -735,74 +735,11 @@ pub fn node_matches_query(node: &Node, query: &str) -> bool {
     false
 }
 
-/// Axis-aligned bounding box `(min_x, min_y, max_x, max_y)` enclosing every node
-/// (each node spans `x..x+width`, `y..y+height`). Returns `None` for an empty
-/// slice. Pure so fit-to-view math is unit-testable without a canvas.
-pub fn nodes_bounding_box(nodes: &[Node]) -> Option<(f64, f64, f64, f64)> {
-    let mut iter = nodes.iter();
-    let first = iter.next()?;
-    let mut min_x = first.x;
-    let mut min_y = first.y;
-    let mut max_x = first.x + first.width;
-    let mut max_y = first.y + first.height;
-    for n in iter {
-        min_x = min_x.min(n.x);
-        min_y = min_y.min(n.y);
-        max_x = max_x.max(n.x + n.width);
-        max_y = max_y.max(n.y + n.height);
-    }
-    Some((min_x, min_y, max_x, max_y))
-}
-
-/// Compute a [`Camera`] that frames `bbox` within a `canvas_w` x `canvas_h`
-/// viewport, leaving ~`margin_frac` (e.g. 0.1 = 10%) padding on every side. The
-/// zoom fits the larger relative dimension and is clamped to the app's `0.1..=5.0`
-/// range; the camera origin is positioned so the padded box is centered.
-///
-/// Pure: takes the box + viewport, returns a Camera — no DOM, easy to test.
-pub fn fit_camera(
-    bbox: (f64, f64, f64, f64),
-    canvas_w: f64,
-    canvas_h: f64,
-    margin_frac: f64,
-) -> Camera {
-    let (min_x, min_y, max_x, max_y) = bbox;
-    let box_w = (max_x - min_x).max(1.0);
-    let box_h = (max_y - min_y).max(1.0);
-
-    // Pad the box on all sides so nodes don't touch the viewport edge.
-    let pad_x = box_w * margin_frac;
-    let pad_y = box_h * margin_frac;
-    let padded_w = box_w + pad_x * 2.0;
-    let padded_h = box_h + pad_y * 2.0;
-
-    // Guard a degenerate viewport (e.g. canvas not yet laid out) so we never
-    // divide by zero or produce a non-finite zoom.
-    let cw = if canvas_w.is_finite() && canvas_w > 0.0 {
-        canvas_w
-    } else {
-        1.0
-    };
-    let ch = if canvas_h.is_finite() && canvas_h > 0.0 {
-        canvas_h
-    } else {
-        1.0
-    };
-
-    let zoom = (cw / padded_w).min(ch / padded_h).clamp(0.1, 5.0);
-
-    // Center the padded box: world coords of the viewport's top-left corner.
-    let center_x = (min_x + max_x) / 2.0;
-    let center_y = (min_y + max_y) / 2.0;
-    let cam_x = center_x - (cw / zoom) / 2.0;
-    let cam_y = center_y - (ch / zoom) / 2.0;
-
-    Camera {
-        x: cam_x,
-        y: cam_y,
-        zoom,
-    }
-}
+// `nodes_bounding_box` and `fit_camera` were relocated to `brainstorm-types` so
+// the headless SVG exporter (`src-tauri`) shares the exact fit/bounds math the
+// canvas uses (no type drift). Re-exported below so `crate::app::nodes_bounding_box`
+// keeps resolving for `src/components/minimap.rs` and the fit-to-view call site.
+pub use brainstorm_types::{fit_camera, nodes_bounding_box};
 
 /// Documented canvas grid spacing in world units. Node positions snap to this on
 /// drag release so layouts stay aligned (matches the 50px grid in CLAUDE.md).
@@ -3170,90 +3107,8 @@ mod tests {
         }
     }
 
-    mod bounding_box_tests {
-        use super::*;
-
-        #[test]
-        fn empty_slice_is_none() {
-            assert!(nodes_bounding_box(&[]).is_none());
-        }
-
-        #[test]
-        fn single_node_box_is_its_rect() {
-            let n = Node::new("n".to_string(), 10.0, 20.0, "".to_string());
-            // Default 200x100.
-            let bbox = nodes_bounding_box(std::slice::from_ref(&n)).unwrap();
-            assert_eq!(bbox, (10.0, 20.0, 210.0, 120.0));
-        }
-
-        #[test]
-        fn spans_all_nodes_including_far_outlier() {
-            let near = Node::new("a".to_string(), 0.0, 0.0, "".to_string());
-            let far = Node::new("b".to_string(), 50000.0, 50000.0, "".to_string());
-            let bbox = nodes_bounding_box(&[near, far]).unwrap();
-            assert_eq!(bbox.0, 0.0);
-            assert_eq!(bbox.1, 0.0);
-            assert_eq!(bbox.2, 50200.0);
-            assert_eq!(bbox.3, 50100.0);
-        }
-    }
-
-    mod fit_camera_tests {
-        use super::*;
-
-        #[test]
-        fn distant_node_lands_inside_viewport() {
-            // The verify gate's scenario: a node placed at (50000, 50000). After
-            // fit-to-view it must be visible — its center maps to a screen point
-            // inside the canvas.
-            let node = Node::new("n".to_string(), 50000.0, 50000.0, "".to_string());
-            let bbox = nodes_bounding_box(std::slice::from_ref(&node)).unwrap();
-            let (cw, ch) = (800.0, 600.0);
-            let cam = fit_camera(bbox, cw, ch, 0.1);
-
-            let (center_wx, center_wy) = node.center();
-            let (sx, sy) = cam.world_to_screen(center_wx, center_wy);
-            assert!(sx >= 0.0 && sx <= cw, "x off-screen: {sx}");
-            assert!(sy >= 0.0 && sy <= ch, "y off-screen: {sy}");
-        }
-
-        #[test]
-        fn zoom_is_clamped_to_range() {
-            // A tiny box would otherwise demand a huge zoom; clamp caps at 5.0.
-            let tiny = (0.0, 0.0, 1.0, 1.0);
-            let cam = fit_camera(tiny, 800.0, 600.0, 0.1);
-            assert!(cam.zoom <= 5.0 && cam.zoom >= 0.1);
-        }
-
-        #[test]
-        fn huge_box_clamps_to_min_zoom() {
-            let huge = (0.0, 0.0, 1_000_000.0, 1_000_000.0);
-            let cam = fit_camera(huge, 800.0, 600.0, 0.1);
-            assert_eq!(cam.zoom, 0.1);
-        }
-
-        #[test]
-        fn degenerate_viewport_does_not_panic() {
-            let bbox = (0.0, 0.0, 100.0, 100.0);
-            let cam = fit_camera(bbox, 0.0, 0.0, 0.1);
-            assert!(cam.zoom.is_finite() && cam.x.is_finite() && cam.y.is_finite());
-        }
-
-        #[test]
-        fn multi_node_box_is_centered() {
-            let a = Node::new("a".to_string(), 0.0, 0.0, "".to_string());
-            let b = Node::new("b".to_string(), 1000.0, 1000.0, "".to_string());
-            let bbox = nodes_bounding_box(&[a, b]).unwrap();
-            let (cw, ch) = (800.0, 600.0);
-            let cam = fit_camera(bbox, cw, ch, 0.1);
-            // Viewport center should map to the box center.
-            let box_cx = (bbox.0 + bbox.2) / 2.0;
-            let box_cy = (bbox.1 + bbox.3) / 2.0;
-            let (vx, vy) = cam.screen_to_world(cw / 2.0, ch / 2.0);
-            assert!((vx - box_cx).abs() < 1e-6, "x center off: {vx} vs {box_cx}");
-            assert!((vy - box_cy).abs() < 1e-6, "y center off: {vy} vs {box_cy}");
-        }
-    }
+    // `bounding_box_tests` and `fit_camera_tests` moved to `crates/brainstorm-types`
+    // alongside the relocated `nodes_bounding_box` / `fit_camera` helpers.
 
     mod snap_to_grid_tests {
         use super::*;

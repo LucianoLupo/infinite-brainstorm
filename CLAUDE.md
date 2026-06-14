@@ -30,10 +30,11 @@ brainstorm /path/to/project
 
 **Headless CLI subcommands (no GUI):**
 ```bash
-brainstorm validate [path]   # validate a board.json; exits non-zero on structural errors
-brainstorm query <expr>      # read-only query, prints the result to stdout
+brainstorm validate [path]              # validate a board.json; exits non-zero on structural errors
+brainstorm query <expr>                 # read-only query, prints the result to stdout
+brainstorm export <board.json> --out x.svg [--fit|--region X,Y,W,H|--camera X,Y,ZOOM] [--nodes id,id|--group G] [--width N --height N]
 ```
-With no subcommand, `brainstorm` launches the desktop app. The `validate`/`query` commands let agents inspect a board without opening the window — see [CLI: validate & query](#cli-validate--query).
+With no subcommand, `brainstorm` launches the desktop app. The `validate`/`query`/`export` commands let agents inspect or render a board without opening the window — see [CLI: validate, query & export](#cli-validate-query--export).
 
 **File location:** `./board.json` in current working directory
 
@@ -64,9 +65,9 @@ With no subcommand, `brainstorm` launches the desktop app. The `validate`/`query
 cat ./board.json
 ```
 
-### CLI: validate & query
+### CLI: validate, query & export
 
-Two headless subcommands turn the agent loop into **write → validate → commit** — no GUI needed.
+Three headless subcommands turn the agent loop into **write → validate → commit** (plus headless rendering) — no GUI needed.
 
 **Validate** (`brainstorm validate [path]`, defaults to `./board.json`):
 ```bash
@@ -84,6 +85,16 @@ brainstorm query node:<id>       # one node by id
 brainstorm query type:idea       # nodes of a given node_type
 brainstorm query tag:urgent      # nodes carrying a tag
 ```
+
+**Export** (`brainstorm export <board.json> --out <path.svg>`) — render a board to an image with no window:
+```bash
+brainstorm export ./board.json --out out.svg               # --fit (all nodes + padding) is the default
+brainstorm export ./board.json --out out.svg --region 0,0,800,600   # frame a world-space region
+brainstorm export ./board.json --out out.svg --camera 100,100,1.5   # explicit camera (x,y,zoom)
+brainstorm export ./board.json --out out.svg --group cluster-a      # only one group (--nodes id,id for an id subset)
+brainstorm export ./board.json --out out.svg --width 1600 --height 1000
+```
+Pure-Rust **SVG** renderer reusing the canvas fit/bounds math + Gotham palette (`brainstorm-types`). **Read-only** on `board.json` — writes only `--out`. SVG-only for now: headless `.png` exits non-zero with a pointer to rasterize externally (in-app PNG export already ships; a pure-Rust SVG rasterizer is the documented follow-up). Fidelity caveat: no `measure_text` headless, so text wrapping uses a monospace-width heuristic and line breaks may differ slightly from the GUI; image/md/link nodes render box + `[TYPE]` label + meta only (no decode/fetch).
 
 ### Add multiple nodes at once
 Read the file, parse JSON, append nodes with calculated positions, write back. Use grid math:
@@ -134,7 +145,7 @@ Read the file, parse JSON, append nodes with calculated positions, write back. U
                                │ Tauri IPC (invoke/listen)
 ┌──────────────────────────────┴──────────────────────────────────────┐
 │                        Backend (Tauri/Rust)                         │
-│  src-tauri/src/main.rs - clap CLI: `validate` / `query` / GUI       │
+│  src-tauri/src/main.rs - clap CLI: `validate`/`query`/`export`/GUI  │
 │  src-tauri/src/lib.rs  - Commands: load_board, save_board (atomic),  │
 │                          fetch_link_preview (SSRF-hardened),        │
 │                          read_image_base64 / read_markdown_file     │
@@ -248,7 +259,7 @@ infinite-brainstorm/                # Cargo workspace
 │   └── components/          # ErrorBanner, Minimap, SearchOverlay, image/markdown modals, NodeEditor
 ├── src-tauri/               # Backend (Tauri Rust)
 │   ├── src/
-│   │   ├── main.rs          # clap CLI (validate/query/GUI) + Tauri entry point
+│   │   ├── main.rs          # clap CLI (validate/query/export/GUI) + Tauri entry point
 │   │   └── lib.rs           # Commands + atomic save + file watcher
 │   ├── tests/               # Integration tests: atomic_save, board_roundtrip, watcher (+ golden_board.json)
 │   ├── capabilities/        # Tauri permissions
@@ -499,11 +510,13 @@ Drags use pointer-capture / document listeners so they continue off-canvas (no c
 - ✅ Search (Cmd+F overlay, filter by text/tags/status, Enter recenters first match)
 - ✅ Fit-to-view (F), reset zoom (Cmd+0), select-all (Cmd+A)
 - ✅ Minimap (bottom-right overview, click-to-recenter)
-- ✅ PNG export (current viewport via `canvas.to_data_url`)
+- ✅ PNG export (in-app, current viewport via `canvas.to_data_url`)
+- ✅ SVG export (headless `brainstorm export`, pure-Rust — positions the camera and renders with no window; reuses the canvas fit/bounds math + Gotham palette)
 - ✅ Snap-to-grid on drag release (50px); off-canvas drags via pointer-capture
 - ✅ Camera pan/zoom persists per-board to localStorage and restores on reopen
 
 **Not Yet Implemented:**
+- **Headless PNG/PDF export** - `brainstorm export --out x.png` (rasterize the SVG via a pure-Rust rasterizer like resvg/usvg) and vector PDF. Headless SVG already ships; in-app PNG already ships.
 - **Multi-board** - Multiple board files, board switcher
 - **CRDT (Loro)** - Real-time collaboration
 - **Semantic zoom** - Show node summaries when zoomed out
@@ -516,7 +529,7 @@ Drags use pointer-capture / document listeners so they continue off-canvas (no c
 - ✅ **Node auto-size** - Agents can omit `width`/`height`; app auto-sizes on load based on text content
 - ✅ **Auto-layout algorithms** - Layout math documented in skill for Claude Code (grid, tree, radial, kanban, flowchart, timeline, clustering)
 - ✅ **Board templates** - 20 template JSON files in `templates/`: 6 general (mind-map, kanban, flowchart, swot, pros-cons, timeline) + 14 software-architecture diagrams (C4 L1/L2/L3, UML sequence/class/state-machine/activity, ERD, DFD, microservices service map, event-driven flow, hexagonal ports-and-adapters, deployment, ADR log). The skill's "Software Architecture Diagrams" section documents the standard visual language, a question→diagram decision table, and per-diagram how/when/why so the agent diagrams architecture the standard way.
-- ✅ **CLI validate/query** - `brainstorm validate` (structural checks, non-zero exit) and `brainstorm query` (count/nodes/edges/node:/type:/tag:) for headless agent loops
+- ✅ **CLI validate/query/export** - `brainstorm validate` (structural checks, non-zero exit), `brainstorm query` (count/nodes/edges/node:/type:/tag:), and `brainstorm export` (pure-Rust SVG render with `--fit`/`--region`/`--camera` + `--nodes`/`--group` subsetting) for headless agent loops
 - ✅ **JSON Schema** - `board.schema.json` is the single source of truth for the board format
 - ✅ **Atomic save + non-destructive load** - No partial writes; a parse error preserves the board and shows a banner instead of blanking it
 

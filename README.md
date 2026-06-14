@@ -278,9 +278,9 @@ Changes sync to the canvas in under 100ms.
 
 See [`CLAUDE.md`](./CLAUDE.md) for detailed AI integration docs, or install the [Claude Code skill](#claude-code-skill) for the best experience.
 
-### CLI: validate & query
+### CLI: validate, query & export
 
-Two headless subcommands let agents inspect a board without opening the UI — making the loop **write → validate → commit**. With no subcommand, `brainstorm` launches the desktop app.
+Three headless subcommands let agents inspect or render a board without opening the UI — making the loop **write → validate → commit**. With no subcommand, `brainstorm` launches the desktop app.
 
 ```bash
 # Validate structure: duplicate/dangling ids, non-finite coords, bad priority.
@@ -295,7 +295,17 @@ brainstorm query edges
 brainstorm query node:<id>       # one node by id
 brainstorm query type:idea       # nodes of a node_type
 brainstorm query tag:urgent      # nodes carrying a tag
+
+# Render a board to an image WITHOUT opening a window. SVG-first, pure Rust.
+brainstorm export ./board.json --out out.svg                 # --fit is the default
+brainstorm export ./board.json --out out.svg --region 0,0,800,600
+brainstorm export ./board.json --out out.svg --camera 100,100,1.5
+brainstorm export ./board.json --out out.svg --group cluster-a   # subset by group
+brainstorm export ./board.json --out out.svg --nodes id1,id2     # subset by ids
+brainstorm export ./board.json --out out.svg --width 1600 --height 1000
 ```
+
+`export` lets an agent position the camera and produce an image with no GUI. It is **read-only** on `board.json` (writes only `--out`). Output is **SVG-only** for now — headless PNG is a documented follow-up (in-app PNG export already ships; `.png` here exits non-zero with a pointer to rasterize the SVG externally). One fidelity note: headless rendering has no `measure_text`, so text wrapping uses a monospace-width heuristic and line breaks may differ slightly from the GUI; image/md/link nodes render as box + `[TYPE]` label + meta only (no decode, no network fetch).
 
 The board format is defined by a JSON Schema at `.claude/skills/infinite-brainstorm/board.schema.json`.
 
@@ -388,7 +398,7 @@ Contributions are welcome!
 | `src/history.rs` | Undo/redo behavior |
 | `src/components/` | Modals, error banner, minimap, search overlay |
 | `src-tauri/src/lib.rs` | Backend commands, atomic save, file watcher |
-| `src-tauri/src/main.rs` | `validate`/`query` CLI subcommands |
+| `src-tauri/src/main.rs` | `validate`/`query`/`export` CLI subcommands |
 
 **Note:** The data model lives in the shared `crates/brainstorm-types` crate, which both the frontend and backend re-export — so there's nothing to keep in sync by hand, and a mismatch is a compile error.
 
@@ -399,9 +409,9 @@ Contributions are welcome!
 - **Update docs** — If you add features, update `CLAUDE.md`, the skill, `board.schema.json`, and this README
 - **Both crates must compile and pass tests** — `cargo test` (host) and `cargo test --manifest-path src-tauri/Cargo.toml` (backend); CI enforces this plus a wasm32 build
 
-Already shipped: PNG export, Cmd+F search/filter, minimap, edge labels, and group backgrounds. Still open:
+Already shipped: in-app PNG export, headless SVG export (`brainstorm export`, pure-Rust), Cmd+F search/filter, minimap, edge labels, and group backgrounds. Still open:
 
-- [ ] **SVG/PDF export** — Vector export of the canvas (PNG export already exists)
+- [ ] **Headless PNG/PDF export** — `brainstorm export --out x.png` (rasterize the SVG; pulls in a pure-Rust rasterizer like resvg/usvg) and vector PDF. SVG export already ships.
 - [ ] **Keyboard navigation** — Arrow keys to traverse connected nodes
 - [ ] **Semantic zoom** — Node summaries when zoomed out
 - [ ] **Themes** — Light mode, custom color schemes

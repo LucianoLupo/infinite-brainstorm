@@ -307,6 +307,20 @@ brainstorm query group:cluster-a # node ids in a group
 brainstorm query priority:1      # node ids at a priority
 ```
 
+### Export a board to an image (headless)
+Render a board to an image with **no window** — useful when an agent wants to position the camera and produce a picture of the canvas (e.g. to attach to a PR, a report, or a chat). Pure-Rust **SVG** renderer; read-only on `board.json` (writes only `--out`).
+```bash
+brainstorm export ./board.json --out out.svg                  # --fit (all nodes + 10% padding) is the default
+brainstorm export ./board.json --out out.svg --region 0,0,800,600   # frame an explicit world region (x,y,w,h)
+brainstorm export ./board.json --out out.svg --camera 100,100,1.5   # explicit camera (x,y,zoom)
+brainstorm export ./board.json --out out.svg --group cluster-a      # only one group
+brainstorm export ./board.json --out out.svg --nodes id1,id2        # only specific node ids (edges kept if both ends survive)
+brainstorm export ./board.json --out out.svg --width 1600 --height 1000   # output size (default 1600x1000)
+```
+`--fit`/`--region`/`--camera` are mutually exclusive (default `--fit`); `--nodes`/`--group` are mutually exclusive. **SVG-only for now** — `.png` exits non-zero with a pointer to rasterize the SVG externally (headless PNG is a documented follow-up; in-app PNG export already exists).
+
+**Text-fidelity caveat:** headless rendering has no browser `measure_text`, so text wrapping uses a monospace-width approximation — line breaks may differ slightly from the GUI. Image/md/link nodes render as a box + `[TYPE]` label + metadata only (no image decode, no network fetch) — exactly the deterministic, SSRF-safe subset. For pixel-perfect WYSIWYG output, screenshot the GUI instead.
+
 ### Create a mind map
 
 1. Create central node at (0, 0)

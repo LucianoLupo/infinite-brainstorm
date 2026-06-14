@@ -11,6 +11,16 @@ if [ ! -f "$BINARY" ]; then
     exit 1
 fi
 
+# Headless subcommands (and clap's own flags) pass straight through to the
+# binary, run from the CALLER's cwd (no `cd` first) so the cwd-anchored board
+# path resolves correctly. Without this, `brainstorm validate` would be treated
+# as a directory name below and fail with "Directory 'validate' not found".
+case "$1" in
+    validate|query|export|--help|-h|--version)
+        exec "$BINARY" "$@"
+        ;;
+esac
+
 # Get target directory (default to current)
 TARGET_DIR="${1:-.}"
 

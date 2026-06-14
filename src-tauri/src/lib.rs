@@ -264,6 +264,556 @@ type:<node_type> | tag:<tag> | status:<status> | group:<group> | priority:<n>"
     )
 }
 
+// ----------------------------------------------------------------------------
+// Headless SVG export (`brainstorm export`)
+//
+// A pure, DOM-free renderer of a board to an SVG string, reusing the shared
+// `brainstorm-types` geometry (`Camera`, `fit_camera`, `nodes_bounding_box`) and
+// color palette so the output matches the live canvas without opening a window.
+// Camera/font/wrap math is ported verbatim from `src/canvas.rs`, except text
+// width — the headless path has no `measure_text`, so it uses a deterministic
+// monospace advance heuristic (`approx_text_width`). Image/md/link content is
+// rendered as box + `[TYPE]` label + meta only (no decode, no network fetch),
+// matching the canvas (where that content is an HTML overlay) and keeping the
+// output deterministic + SSRF-safe.
+// ----------------------------------------------------------------------------
+
+use brainstorm_types::{fit_camera, nodes_bounding_box, palette, Camera};
+
+/// How the export frames the board within the output image.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExportView {
+    /// Fit all (filtered) nodes with ~10% padding — the default.
+    Fit,
+    /// Frame an explicit world-space region `(x, y, w, h)`.
+    Region { x: f64, y: f64, w: f64, h: f64 },
+    /// Use an explicit camera `(x, y, zoom)` directly.
+    Camera { x: f64, y: f64, zoom: f64 },
+}
+
+/// Output image dimensions (px) plus the framing strategy.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportOptions {
+    pub width: u32,
+    pub height: u32,
+    pub view: ExportView,
+}
+
+/// Which nodes to include in the export. Edges survive only when both endpoints
+/// survive the filter.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeFilter {
+    /// Every node.
+    All,
+    /// Only nodes whose id is in this list.
+    Ids(Vec<String>),
+    /// Only nodes in this `group`.
+    Group(String),
+}
+
+impl NodeFilter {
+    fn keeps(&self, node: &Node) -> bool {
+        match self {
+            NodeFilter::All => true,
+            NodeFilter::Ids(ids) => ids.iter().any(|id| id == &node.id),
+            NodeFilter::Group(g) => node.group.as_deref() == Some(g.as_str()),
+        }
+    }
+}
+
+/// Deterministic stand-in for canvas `measure_text`: a monospace advance of
+/// `0.6em` per char. Headless rendering has no font metrics, so the SVG wrap math
+/// and label offsets use this instead — line breaks may differ slightly from the
+/// proportional-font GUI, but the output is stable and reproducible.
+fn approx_text_width(s: &str, font_px: f64) -> f64 {
+    s.chars().count() as f64 * font_px * 0.6
+}
+
+/// Escape the five XML metacharacters so node/edge/group text can never break
+/// the SVG document (or inject markup). Applied to every emitted text run.
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Format an `f64` for SVG coordinate output: trims to at most 3 decimals and
+/// drops a trailing `.0`, so `100.0 -> "100"` and `12.3456 -> "12.346"`. Keeps
+/// the byte output compact and stable across runs.
+fn fmt_coord(v: f64) -> String {
+    if !v.is_finite() {
+        return "0".to_string();
+    }
+    let r = (v * 1000.0).round() / 1000.0;
+    if r == r.trunc() {
+        format!("{}", r as i64)
+    } else {
+        let mut s = format!("{r:.3}");
+        while s.ends_with('0') {
+            s.pop();
+        }
+        if s.ends_with('.') {
+            s.pop();
+        }
+        s
+    }
+}
+
+/// Wrap `text` into lines that fit within `max_width`, using the monospace
+/// `approx_text_width` heuristic. Ported from canvas `wrap_text`: split on `\n`
+/// first, then greedily word-pack; a single word wider than the line is kept on
+/// its own (overflow) rather than dropped. Never returns an empty Vec.
+fn wrap_text(text: &str, max_width: f64, font_px: f64) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+
+    for paragraph in text.split('\n') {
+        if paragraph.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+
+        let words: Vec<&str> = paragraph.split_whitespace().collect();
+        if words.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+
+        let mut current_line = String::new();
+        for word in words {
+            let test_line = if current_line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{current_line} {word}")
+            };
+
+            if approx_text_width(&test_line, font_px) <= max_width || current_line.is_empty() {
+                current_line = test_line;
+            } else {
+                lines.push(current_line);
+                current_line = word.to_string();
+            }
+        }
+
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    lines
+}
+
+/// Same intersection math as canvas `clip_line_to_rect`: the point where a line
+/// from `from` toward a rectangle center crosses the rectangle boundary.
+fn clip_line_to_rect(
+    from_x: f64,
+    from_y: f64,
+    rect_cx: f64,
+    rect_cy: f64,
+    half_w: f64,
+    half_h: f64,
+) -> (f64, f64) {
+    let dx = from_x - rect_cx;
+    let dy = from_y - rect_cy;
+
+    if dx.abs() < 1e-10 && dy.abs() < 1e-10 {
+        return (rect_cx, rect_cy);
+    }
+
+    let tx = if dx.abs() > 1e-10 {
+        half_w / dx.abs()
+    } else {
+        f64::INFINITY
+    };
+    let ty = if dy.abs() > 1e-10 {
+        half_h / dy.abs()
+    } else {
+        f64::INFINITY
+    };
+    let t = tx.min(ty);
+
+    (rect_cx + t * dx, rect_cy + t * dy)
+}
+
+/// Render a board to an SVG document string.
+///
+/// Pipeline mirrors the canvas z-order: background → group boxes → edges
+/// (+ arrowheads + label pills) → nodes (rect + border + `[TYPE]` label +
+/// priority/status/tags + wrapped body). The `filter` selects which nodes render
+/// (edges survive only when both endpoints do), and `opts.view` resolves the
+/// camera. Pure + read-only — never touches the board file. Errors only when the
+/// output dimensions are degenerate.
+pub fn render_board_svg(
+    board: &Board,
+    filter: &NodeFilter,
+    opts: &ExportOptions,
+) -> Result<String, String> {
+    if opts.width == 0 || opts.height == 0 {
+        return Err("export dimensions must be non-zero".to_string());
+    }
+    let width = opts.width as f64;
+    let height = opts.height as f64;
+
+    // Work on a clone so we can auto-size omitted dimensions exactly like the GUI
+    // does on load, without mutating the caller's board.
+    let mut working = board.clone();
+    working.apply_auto_size();
+
+    // Apply the node filter; keep only edges whose endpoints both survive.
+    let nodes: Vec<Node> = working
+        .nodes
+        .into_iter()
+        .filter(|n| filter.keeps(n))
+        .collect();
+    let kept_ids: std::collections::HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+    let edges: Vec<Edge> = working
+        .edges
+        .into_iter()
+        .filter(|e| {
+            kept_ids.contains(e.from_node.as_str()) && kept_ids.contains(e.to_node.as_str())
+        })
+        .collect();
+
+    // Resolve the camera.
+    let camera = match &opts.view {
+        ExportView::Fit => match nodes_bounding_box(&nodes) {
+            Some(bbox) => fit_camera(bbox, width, height, 0.1),
+            // Empty board: identity camera (nothing to frame).
+            None => Camera::new(),
+        },
+        ExportView::Region { x, y, w, h } => {
+            fit_camera((*x, *y, *x + *w, *y + *h), width, height, 0.0)
+        }
+        ExportView::Camera { x, y, zoom } => Camera {
+            x: *x,
+            y: *y,
+            zoom: *zoom,
+        },
+    };
+    let zoom = camera.zoom;
+
+    let mut svg = String::new();
+    svg.push_str(&format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n",
+        opts.width, opts.height, opts.width, opts.height
+    ));
+    // Full-viewport background.
+    svg.push_str(&format!(
+        "<rect x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" fill=\"{}\"/>\n",
+        opts.width,
+        opts.height,
+        palette::BG_COLOR
+    ));
+
+    render_groups_svg(&mut svg, &nodes, &camera);
+    render_edges_svg(&mut svg, &nodes, &edges, &camera, zoom);
+    for node in &nodes {
+        render_node_svg(&mut svg, node, &camera, zoom);
+    }
+
+    svg.push_str("</svg>");
+    Ok(svg)
+}
+
+/// A group's world-space bounding box: `(min_x, min_y, max_x, max_y)`.
+type GroupBounds = (f64, f64, f64, f64);
+
+/// Emit translucent group bounding boxes + labels. Ported from canvas
+/// `draw_groups` (padding 30 world units, label font `(10*zoom).max(7)`,
+/// label pad `4*zoom`). Groups are collected into a Vec and sorted by name so the
+/// byte output is deterministic (the canvas iterates a HashMap, which is not).
+fn render_groups_svg(svg: &mut String, nodes: &[Node], camera: &Camera) {
+    if !nodes.iter().any(|n| n.group.is_some()) {
+        return;
+    }
+
+    let mut groups: std::collections::HashMap<&str, GroupBounds> = std::collections::HashMap::new();
+    for node in nodes {
+        if let Some(ref group) = node.group {
+            let entry = groups.entry(group.as_str()).or_insert((
+                node.x,
+                node.y,
+                node.x + node.width,
+                node.y + node.height,
+            ));
+            entry.0 = entry.0.min(node.x);
+            entry.1 = entry.1.min(node.y);
+            entry.2 = entry.2.max(node.x + node.width);
+            entry.3 = entry.3.max(node.y + node.height);
+        }
+    }
+
+    // Deterministic emission order (HashMap iteration is not stable).
+    let mut sorted: Vec<(&str, GroupBounds)> = groups.into_iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+
+    let padding = 30.0;
+    let label_font_size = (10.0 * camera.zoom).max(7.0);
+    let label_pad = 4.0 * camera.zoom;
+
+    for (name, (min_x, min_y, max_x, max_y)) in sorted {
+        let (sx, sy) = camera.world_to_screen(min_x - padding, min_y - padding);
+        let (ex, ey) = camera.world_to_screen(max_x + padding, max_y + padding);
+        let w = ex - sx;
+        let h = ey - sy;
+
+        svg.push_str(&format!(
+            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\" stroke=\"{}\" stroke-width=\"1\"/>\n",
+            fmt_coord(sx),
+            fmt_coord(sy),
+            fmt_coord(w),
+            fmt_coord(h),
+            palette::GROUP_BG,
+            palette::GROUP_BORDER
+        ));
+        // Label is top-left, baseline shifted down by the font size to match the
+        // canvas `textBaseline = "top"`.
+        svg.push_str(&format!(
+            "<text x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{}\">{}</text>\n",
+            fmt_coord(sx + label_pad),
+            fmt_coord(sy + label_pad + label_font_size),
+            SVG_FONT_SANS,
+            fmt_coord(label_font_size),
+            palette::GROUP_LABEL_COLOR,
+            xml_escape(name)
+        ));
+    }
+}
+
+/// Emit edges (clipped line + arrowhead + optional label pill). Ported from
+/// canvas `draw_edge` / `draw_arrowhead`.
+fn render_edges_svg(svg: &mut String, nodes: &[Node], edges: &[Edge], camera: &Camera, zoom: f64) {
+    let node_map: std::collections::HashMap<&str, &Node> =
+        nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+
+    for edge in edges {
+        let (from, to) = match (
+            node_map.get(edge.from_node.as_str()),
+            node_map.get(edge.to_node.as_str()),
+        ) {
+            (Some(f), Some(t)) => (*f, *t),
+            _ => continue,
+        };
+
+        let from_cx = from.x + from.width / 2.0;
+        let from_cy = from.y + from.height / 2.0;
+        let to_cx = to.x + to.width / 2.0;
+        let to_cy = to.y + to.height / 2.0;
+
+        let (from_bx, from_by) = clip_line_to_rect(
+            to_cx,
+            to_cy,
+            from_cx,
+            from_cy,
+            from.width / 2.0,
+            from.height / 2.0,
+        );
+        let (to_bx, to_by) = clip_line_to_rect(
+            from_cx,
+            from_cy,
+            to_cx,
+            to_cy,
+            to.width / 2.0,
+            to.height / 2.0,
+        );
+
+        let (from_sx, from_sy) = camera.world_to_screen(from_bx, from_by);
+        let (to_sx, to_sy) = camera.world_to_screen(to_bx, to_by);
+
+        let angle = (to_sy - from_sy).atan2(to_sx - from_sx);
+        let arrow_size = (10.0 * zoom).clamp(5.0, 20.0);
+
+        svg.push_str(&format!(
+            "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1\"/>\n",
+            fmt_coord(from_sx),
+            fmt_coord(from_sy),
+            fmt_coord(to_sx),
+            fmt_coord(to_sy),
+            palette::EDGE_COLOR
+        ));
+
+        // Arrowhead triangle (canvas `draw_arrowhead`, spread 0.4 rad).
+        let spread = 0.4;
+        let x1 = to_sx - arrow_size * (angle - spread).cos();
+        let y1 = to_sy - arrow_size * (angle - spread).sin();
+        let x2 = to_sx - arrow_size * (angle + spread).cos();
+        let y2 = to_sy - arrow_size * (angle + spread).sin();
+        svg.push_str(&format!(
+            "<polygon points=\"{},{} {},{} {},{}\" fill=\"{}\"/>\n",
+            fmt_coord(to_sx),
+            fmt_coord(to_sy),
+            fmt_coord(x1),
+            fmt_coord(y1),
+            fmt_coord(x2),
+            fmt_coord(y2),
+            palette::EDGE_COLOR
+        ));
+
+        if let Some(ref label) = edge.label {
+            let mid_x = (from_sx + to_sx) / 2.0;
+            let mid_y = (from_sy + to_sy) / 2.0;
+            let label_font_size = (10.0 * zoom).max(7.0);
+            let text_w = approx_text_width(label, label_font_size);
+            let pill_h = label_font_size + 6.0;
+            let pill_w = text_w + 10.0;
+
+            svg.push_str(&format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\"/>\n",
+                fmt_coord(mid_x - pill_w / 2.0),
+                fmt_coord(mid_y - pill_h / 2.0),
+                fmt_coord(pill_w),
+                fmt_coord(pill_h),
+                palette::EDGE_LABEL_BG
+            ));
+            svg.push_str(&format!(
+                "<text x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{}\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>\n",
+                fmt_coord(mid_x),
+                fmt_coord(mid_y),
+                SVG_FONT_SANS,
+                fmt_coord(label_font_size),
+                palette::TEXT_DIM,
+                xml_escape(label)
+            ));
+        }
+    }
+}
+
+/// Emit a single node: surface rect, 1px border (per-node `color` override, else
+/// the palette border), `[TYPE]` corner label, optional `P{priority}` /
+/// `status` / `tags`, and wrapped body text for text/idea/note/unknown nodes.
+/// Image/md/link nodes render box + label + meta only (no decode/fetch). Ports
+/// the layout math from canvas `draw_node` / `draw_wrapped_text`.
+fn render_node_svg(svg: &mut String, node: &Node, camera: &Camera, zoom: f64) {
+    let (screen_x, screen_y) = camera.world_to_screen(node.x, node.y);
+    let screen_width = node.width * zoom;
+    let screen_height = node.height * zoom;
+
+    // Surface + border.
+    let border = node.color.as_deref().unwrap_or(palette::BORDER_COLOR);
+    svg.push_str(&format!(
+        "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\" stroke=\"{}\" stroke-width=\"1\"/>\n",
+        fmt_coord(screen_x),
+        fmt_coord(screen_y),
+        fmt_coord(screen_width),
+        fmt_coord(screen_height),
+        node.node_type.bg_color(),
+        border
+    ));
+
+    // Body text — only for the text-bearing kinds (image/md/link render meta
+    // only, matching the canvas where their content is an HTML overlay).
+    if matches!(
+        node.node_type,
+        NodeType::Text | NodeType::Idea | NodeType::Note | NodeType::Unknown
+    ) && !node.text.is_empty()
+    {
+        let font_px = (12.0 * zoom).max(8.0).round();
+        let padding = 8.0 * zoom;
+        let label_height = 16.0 * zoom;
+        let text_x = screen_x + screen_width / 2.0;
+        let center_y = screen_y + label_height + (screen_height - label_height) / 2.0;
+        let max_width = screen_width - 2.0 * padding;
+        let max_height = screen_height - label_height - padding;
+        let line_height = font_px * 1.4;
+
+        let lines = wrap_text(&node.text, max_width, font_px);
+        let visible_lines = ((max_height / line_height).floor() as usize).max(1);
+        let drawn_count = lines.len().min(visible_lines);
+        let actual_height = drawn_count as f64 * line_height;
+        let start_y = center_y - actual_height / 2.0 + line_height / 2.0;
+
+        for (i, line) in lines.iter().take(visible_lines).enumerate() {
+            if line.is_empty() {
+                continue;
+            }
+            let y = start_y + i as f64 * line_height;
+            svg.push_str(&format!(
+                "<text x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{}\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>\n",
+                fmt_coord(text_x),
+                fmt_coord(y),
+                SVG_FONT_MONO,
+                fmt_coord(font_px),
+                palette::TEXT_DIM,
+                xml_escape(line)
+            ));
+        }
+    }
+
+    // `[TYPE]` corner label (top-left), plus optional priority next to it.
+    let type_indicator = node.node_type.label();
+    let small_font = (9.0 * zoom).max(6.0);
+    let pad = 4.0 * zoom;
+    svg.push_str(&format!(
+        "<text x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{}\">{}</text>\n",
+        fmt_coord(screen_x + pad),
+        fmt_coord(screen_y + pad + small_font),
+        SVG_FONT_SANS,
+        fmt_coord(small_font),
+        palette::TEXT_DIM,
+        xml_escape(type_indicator)
+    ));
+
+    if let Some(priority) = node.priority {
+        let p_text = format!("P{}", priority.clamp(1, 5));
+        // Offset past the type label using the same monospace heuristic the
+        // canvas approximates with measure_text(type_indicator).
+        let type_width = approx_text_width(type_indicator, small_font);
+        svg.push_str(&format!(
+            "<text x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{}\">{}</text>\n",
+            fmt_coord(screen_x + pad + type_width + pad),
+            fmt_coord(screen_y + pad + small_font),
+            SVG_FONT_SANS,
+            fmt_coord(small_font),
+            palette::TEXT_DIM,
+            xml_escape(&p_text)
+        ));
+    }
+
+    if let Some(ref status) = node.status {
+        svg.push_str(&format!(
+            "<text x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{}\" text-anchor=\"end\">{}</text>\n",
+            fmt_coord(screen_x + screen_width - pad),
+            fmt_coord(screen_y + pad + small_font),
+            SVG_FONT_SANS,
+            fmt_coord(small_font),
+            palette::TEXT_DIM,
+            xml_escape(status)
+        ));
+    }
+
+    if !node.tags.is_empty() {
+        let tags_text = node.tags.join(", ");
+        let tag_font = (8.0 * zoom).max(5.0);
+        svg.push_str(&format!(
+            "<text x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{}\">{}</text>\n",
+            fmt_coord(screen_x + pad),
+            fmt_coord(screen_y + screen_height - pad),
+            SVG_FONT_SANS,
+            fmt_coord(tag_font),
+            palette::TEXT_DIM,
+            xml_escape(&tags_text)
+        ));
+    }
+}
+
+/// Font families for the SVG output, matching `src/canvas.rs` (`FONT_SANS` for
+/// proportional labels/meta, `FONT_MONO` for node body text). `&apos;` keeps the
+/// single quotes valid inside an XML attribute value.
+const SVG_FONT_SANS: &str = "Inter, system-ui, sans-serif";
+const SVG_FONT_MONO: &str = "ui-monospace, &apos;SF Mono&apos;, Menlo, Consolas, monospace";
+
 /// Resolve the path to the active `board.json`, anchored on the process's
 /// current working directory.
 ///
@@ -1693,6 +2243,172 @@ mod tests {
         fn validate_url_host_rejects_localhost() {
             let u = reqwest::Url::parse("http://localhost:8080/admin").unwrap();
             assert!(validate_url_host(&u).is_err());
+        }
+    }
+
+    mod export_tests {
+        use super::*;
+
+        /// A small fixed fixture: two nodes (one fully-decorated `idea` with a
+        /// per-node color override, tags, status, priority, and group; one plain
+        /// `text` node outside the group) connected by one labeled edge. Fixed
+        /// coordinates so the layout — and the SVG bytes — are reproducible.
+        fn fixture() -> Board {
+            let idea = Node {
+                id: "idea-1".to_string(),
+                x: 100.0,
+                y: 100.0,
+                width: 200.0,
+                height: 120.0,
+                text: "Pricing idea".to_string(),
+                node_type: NodeType::Idea,
+                color: Some("#ff6600".to_string()),
+                tags: vec!["urgent".to_string(), "pricing".to_string()],
+                status: Some("in-progress".to_string()),
+                group: Some("cluster-a".to_string()),
+                priority: Some(2),
+            };
+            let plain = Node {
+                id: "text-2".to_string(),
+                x: 500.0,
+                y: 100.0,
+                width: 200.0,
+                height: 100.0,
+                text: "Plain node".to_string(),
+                node_type: NodeType::Text,
+                color: None,
+                tags: vec![],
+                status: None,
+                group: None,
+                priority: None,
+            };
+            Board {
+                version: None,
+                nodes: vec![idea, plain],
+                edges: vec![Edge {
+                    id: "e1".to_string(),
+                    from_node: "idea-1".to_string(),
+                    to_node: "text-2".to_string(),
+                    label: Some("depends on".to_string()),
+                }],
+            }
+        }
+
+        fn fit_opts() -> ExportOptions {
+            ExportOptions {
+                width: 1000,
+                height: 700,
+                view: ExportView::Fit,
+            }
+        }
+
+        #[test]
+        fn renders_valid_svg_envelope() {
+            let out = render_board_svg(&fixture(), &NodeFilter::All, &fit_opts()).unwrap();
+            assert!(out.starts_with("<svg"), "must start with <svg");
+            assert!(out.trim_end().ends_with("</svg>"), "must end with </svg>");
+        }
+
+        #[test]
+        fn contains_expected_content() {
+            let out = render_board_svg(&fixture(), &NodeFilter::All, &fit_opts()).unwrap();
+            // Background.
+            assert!(out.contains("fill=\"#0a0e14\""), "bg color");
+            // Type label + meta.
+            assert!(out.contains("[IDEA]"), "idea type label");
+            assert!(out.contains("[TEXT]"), "text type label");
+            assert!(out.contains("P2"), "priority badge");
+            assert!(out.contains("in-progress"), "status");
+            assert!(out.contains("urgent, pricing"), "tags");
+            // Edge label text and arrowhead.
+            assert!(out.contains("depends on"), "edge label");
+            assert!(out.contains("<polygon"), "arrowhead polygon");
+            // Group box label.
+            assert!(out.contains("cluster-a"), "group label");
+            // Per-node color override on the idea node's border.
+            assert!(
+                out.contains("stroke=\"#ff6600\""),
+                "color override on border"
+            );
+        }
+
+        #[test]
+        fn output_is_deterministic() {
+            // Two renders of the same board must be byte-for-byte identical. This
+            // locks the group Vec-sort + the no-HashMap-iteration-order guarantee.
+            let a = render_board_svg(&fixture(), &NodeFilter::All, &fit_opts()).unwrap();
+            let b = render_board_svg(&fixture(), &NodeFilter::All, &fit_opts()).unwrap();
+            assert_eq!(a, b);
+        }
+
+        #[test]
+        fn group_filter_excludes_other_nodes_and_cross_group_edge() {
+            let out = render_board_svg(
+                &fixture(),
+                &NodeFilter::Group("cluster-a".to_string()),
+                &fit_opts(),
+            )
+            .unwrap();
+            // The ungrouped node and the cross-group edge are dropped.
+            assert!(!out.contains("[TEXT]"), "ungrouped node should be excluded");
+            assert!(
+                !out.contains("<polygon"),
+                "cross-group edge dropped (no arrowhead)"
+            );
+            assert!(
+                !out.contains("depends on"),
+                "cross-group edge label dropped"
+            );
+            // The grouped node still renders.
+            assert!(out.contains("[IDEA]"), "grouped node kept");
+        }
+
+        #[test]
+        fn ids_filter_with_one_id_drops_the_edge() {
+            let out = render_board_svg(
+                &fixture(),
+                &NodeFilter::Ids(vec!["idea-1".to_string()]),
+                &fit_opts(),
+            )
+            .unwrap();
+            assert!(out.contains("[IDEA]"), "selected node kept");
+            assert!(!out.contains("[TEXT]"), "unselected node dropped");
+            // With only one endpoint surviving, the edge is dropped.
+            assert!(!out.contains("<polygon"), "edge dropped (no arrowhead)");
+        }
+
+        #[test]
+        fn text_is_xml_escaped() {
+            let mut board = fixture();
+            board.nodes[1].text = "a < b & c \"q\"".to_string();
+            let out = render_board_svg(&board, &NodeFilter::All, &fit_opts()).unwrap();
+            // The escaped forms appear; the raw metacharacters never do as text.
+            assert!(out.contains("&lt;"), "< escaped");
+            assert!(out.contains("&amp;"), "& escaped");
+            assert!(out.contains("&quot;"), "\" escaped");
+            assert!(
+                !out.contains("a < b"),
+                "raw unescaped text must not leak into the SVG"
+            );
+        }
+
+        #[test]
+        fn zero_dimensions_error() {
+            let opts = ExportOptions {
+                width: 0,
+                height: 700,
+                view: ExportView::Fit,
+            };
+            assert!(render_board_svg(&fixture(), &NodeFilter::All, &opts).is_err());
+        }
+
+        #[test]
+        fn empty_board_renders_envelope() {
+            let out = render_board_svg(&Board::default(), &NodeFilter::All, &fit_opts()).unwrap();
+            assert!(out.starts_with("<svg"));
+            assert!(out.trim_end().ends_with("</svg>"));
+            // Background still painted.
+            assert!(out.contains("fill=\"#0a0e14\""));
         }
     }
 }

@@ -12,6 +12,11 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlImageElement};
 // Gotham-ops palette — mirrors styles.css :root (the DOM source of truth).
 // canvas2D can't read CSS vars, so these hold literal hex/rgba equivalents;
 // each `= var(--x)` comment pins it to the token so the two can't drift.
+//
+// NOTE: the STATIC subset used by the headless SVG exporter is mirrored in
+// `brainstorm_types::palette` (single source of truth for both renderers); a
+// palette-equality test pins the two copies equal. These canvas-private consts
+// are deliberately left in place so WASM rendering is not perturbed.
 const BG_COLOR: &str = "#0a0e14"; // = var(--bg)
 const GRID_MINOR: &str = "rgba(122, 142, 173, 0.08)"; // = var(--grid)
 const BORDER_COLOR: &str = "rgba(122, 142, 173, 0.32)"; // = var(--border-strong)

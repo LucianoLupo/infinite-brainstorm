@@ -1,6 +1,8 @@
 # Build outputs
 /dist/
 /target/
+# Transient git worktrees created by dynamic workflows
+/.claude/worktrees/
 
 # User data (each project has its own board)
 board.json

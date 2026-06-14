@@ -709,7 +709,7 @@ fn render_node_svg(svg: &mut String, node: &Node, camera: &Camera, zoom: f64) {
         fmt_coord(screen_width),
         fmt_coord(screen_height),
         node.node_type.bg_color(),
-        border
+        xml_escape(border)
     ));
 
     // Body text — only for the text-bearing kinds (image/md/link render meta
@@ -2389,6 +2389,28 @@ mod tests {
             assert!(
                 !out.contains("a < b"),
                 "raw unescaped text must not leak into the SVG"
+            );
+        }
+
+        #[test]
+        fn node_color_is_xml_escaped_no_injection() {
+            // Regression: a per-node `color` that passes validate() but tries to
+            // break out of the stroke="" attribute and inject markup must be
+            // escaped, never emitted raw into the SVG.
+            let mut board = fixture();
+            board.nodes[0].color = Some("#000\"/><script>alert(1)</script>".to_string());
+            let out = render_board_svg(&board, &NodeFilter::All, &fit_opts()).unwrap();
+            assert!(
+                !out.contains("<script>"),
+                "injected <script> must not leak into the SVG"
+            );
+            assert!(
+                out.contains("&lt;script&gt;"),
+                "the color markup is escaped instead"
+            );
+            assert!(
+                out.contains("stroke=\"#000&quot;"),
+                "the breakout quote is escaped inside the stroke attribute"
             );
         }
 

@@ -183,9 +183,14 @@ fn parse_floats(label: &str, raw: &str, n: usize) -> Result<Vec<f64>, String> {
     parts
         .iter()
         .map(|p| {
-            p.trim()
+            let t = p.trim();
+            let v = t
                 .parse::<f64>()
-                .map_err(|_| format!("--{label}: '{}' is not a number", p.trim()))
+                .map_err(|_| format!("--{label}: '{t}' is not a number"))?;
+            if !v.is_finite() {
+                return Err(format!("--{label}: '{t}' is not a finite number"));
+            }
+            Ok(v)
         })
         .collect()
 }
@@ -211,7 +216,8 @@ fn resolve_view(
         Ok(ExportView::Camera {
             x: v[0],
             y: v[1],
-            zoom: v[2],
+            // Clamp to the app's valid zoom range (Camera.zoom is 0.1..=5.0).
+            zoom: v[2].clamp(0.1, 5.0),
         })
     } else {
         Ok(ExportView::Fit)

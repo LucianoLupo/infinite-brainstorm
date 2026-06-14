@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; img-src 'self' data: asset: https: blob:; connect-src 'self' ipc: https:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-src 'none'",
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data: asset: https: blob:; connect-src 'self' ipc: https:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-src 'none'",
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPDATA/**", "$APPLOCALDATA/**", "$RESOURCE/**"]

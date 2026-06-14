@@ -4,6 +4,8 @@
 
 # User data (each project has its own board)
 board.json
+# ...but committed example boards under examples/ are tracked (README links to them)
+!examples/**/board.json
 # Atomic-save byproducts written next to board.json (temp file + backup)
 board.json.tmp
 board.json.bak
